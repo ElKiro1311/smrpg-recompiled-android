@@ -96,9 +96,9 @@ const GameVersion *game_version(void) { return g_version; }
 
 uint64_t game_romfs_bytes(const GameVersion *v) {
     if (!v) return 0;
-    // (SMRPG 1.0.0: la suma de los tamaños de sus 1934 archivos, la que se compara —medida en dos extracciones
-    // limpias—; los 6821116692 de antes eran el tamaño del nivel 5 del IVFC + 0x200 y nunca coincidían: con una copia
-    // buena, el registro decía «damaged or changed game files» y un fallo cualquiera se explicaba como archivos dañados)
+    // (SMRPG 1.0.0: the sum of the sizes of its 1934 files, which is the one compared, measured on two clean
+    // extractions; the earlier 6821116692 was the size of IVFC level 5 + 0x200 and never matched: with a good copy, the
+    // log said "damaged or changed game files" and any crash was explained as damaged files)
     if (!strcmp(v->key, "v1_0_0")) return 6820987323ull;
     return 0;
 }

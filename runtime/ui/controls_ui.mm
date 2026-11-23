@@ -12,6 +12,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"  // (SetFocusID, NavCursorVisible)
 #include "option_rows.h"
+#include "tr.h"
 
 extern "C" bool g_game_las;  // runtime/game_addresses.c (false en SMRPG)
 
@@ -24,13 +25,13 @@ void input_apply_background(void);
 }
 
 // ------------------------------------------------------------------ Configure inputs: what's on it
-// (SMRPG: en español, y cada botón con lo que hace en Super Mario RPG, como en la guía de la pestaña: guide_rows)
-static const char *T(const char *en, const char *es) { return g_game_las ? en : es; }
+// (SMRPG: in the player's language, and each button with what it does in Super Mario RPG, as in the tab's guide:
+// guide_rows)
+static const char *T(const char *las, const char *smrpg) { return g_game_las ? las : tr(smrpg); }
 enum { CAT_BUTTONS, CAT_TRIGGERS, CAT_STICKS, CAT_DPAD, N_CAT };
 static const char *cat_name(int c) {
-    static const char *const en[N_CAT] = {"Buttons", "Triggers", "Sticks", "D-pad"};
-    static const char *const es[N_CAT] = {"Botones", "Gatillos", "Sticks", "Cruceta"};
-    return (g_game_las ? en : es)[c];
+    static const char *const names[N_CAT] = {"Buttons", "Triggers", "Sticks", "D-pad"};
+    return tr(names[c]);
 }
 static const char *const k_cat_hook[N_CAT] = {"buttons", "triggers", "sticks", "dpad"};  // (LARECOMP_CONTROLS_SUB)
 
@@ -40,108 +41,46 @@ static int cat_rows(int cat, bool pad, Bind *out) {
     auto add = [&](int slot, const char *label, const char *section = NULL) { out[n++] = {slot, label, section}; };
     switch (cat) {
     case CAT_BUTTONS:
-        add(BIND_A, T("A", "A · hablar / aceptar")), add(BIND_B, T("B", "B · saltar / cancelar")),
-            add(BIND_X, T("X", "X · objetos")), add(BIND_Y, T("Y", "Y · especiales")), add(BIND_PLUS, T("Plus", "Botón + · menú")),
-            add(BIND_MINUS, T("Minus", "Botón - · ataque de la barra"));
+        add(BIND_A, T("A", "A · talk / confirm")), add(BIND_B, T("B", "B · jump / cancel")),
+            add(BIND_X, T("X", "X · items")), add(BIND_Y, T("Y", "Y · specials")), add(BIND_PLUS, T("Plus", "+ button · menu")),
+            add(BIND_MINUS, T("Minus", "- button · gauge attack"));
         break;
     case CAT_TRIGGERS:
-        add(BIND_L, T("L", "L · caminar")), add(BIND_R, T("R", "R · caminar")), add(BIND_ZL, T("ZL", "ZL · caminar")),
-            add(BIND_ZR, T("ZR", "ZR · caminar"));
+        add(BIND_L, T("L", "L · walk")), add(BIND_R, T("R", "R · walk")), add(BIND_ZL, T("ZL", "ZL · walk")),
+            add(BIND_ZR, T("ZR", "ZR · walk"));
         break;
     case CAT_STICKS: {  // (a controller's sticks stay its sticks: only their presses are buttons)
-        const char *press = T("Press", "Clic"), *up = T("Up", "Arriba"), *down = T("Down", "Abajo"), *left = T("Left", "Izquierda"),
-                   *right = T("Right", "Derecha");
-        add(BIND_LSTICK, press, T("Left stick", "Stick izquierdo (moverse)"));
+        const char *press = T("Press", "Press"), *up = T("Up", "Up"), *down = T("Down", "Down"), *left = T("Left", "Left"),
+                   *right = T("Right", "Right");
+        add(BIND_LSTICK, press, T("Left stick", "Left stick (move)"));
         if (!pad) add(BIND_LS_UP, up), add(BIND_LS_DOWN, down), add(BIND_LS_LEFT, left), add(BIND_LS_RIGHT, right);
-        add(BIND_RSTICK, press, T("Right stick", "Stick derecho"));
+        add(BIND_RSTICK, press, T("Right stick", "Right stick"));
         if (!pad) add(BIND_RS_UP, up), add(BIND_RS_DOWN, down), add(BIND_RS_LEFT, left), add(BIND_RS_RIGHT, right);
         break;
     }
     case CAT_DPAD:
-        add(BIND_UP, T("Up", "Arriba")), add(BIND_DOWN, T("Down", "Abajo")), add(BIND_LEFT, T("Left", "Izquierda")),
-            add(BIND_RIGHT, T("Right", "Derecha"));
+        add(BIND_UP, T("Up", "Up")), add(BIND_DOWN, T("Down", "Down")), add(BIND_LEFT, T("Left", "Left")),
+            add(BIND_RIGHT, T("Right", "Right"));
         break;
     }
     return n;
 }
 
-// (SMRPG) Los nombres en español: de las teclas (SDL las da en inglés), de los botones del mando y de las entradas de la
-// Switch. Solo caracteres de Latin-1: la fuente del menú no tiene más (menu.mm, sus rangos por defecto).
+// (SMRPG) The names in Spanish: of the keys (SDL gives them in English), of the controller buttons and of the Switch
+// inputs. Latin-1 characters only: the menu's font has no others (menu.mm, its default ranges).
 static const char *key_name(int sc) {
     const char *n = bind_key_label(sc);
-    if (g_game_las) return n;
-    if (sc <= 0 || sc >= SDL_SCANCODE_COUNT) return "(ninguna)";
-    static const struct { int sc; const char *es; } k[] = {
-        {SDL_SCANCODE_RETURN, "Intro"},         {SDL_SCANCODE_BACKSPACE, "Retroceso"},  {SDL_SCANCODE_SPACE, "Espacio"},
-        {SDL_SCANCODE_ESCAPE, "Esc"},           {SDL_SCANCODE_TAB, "Tab"},              {SDL_SCANCODE_LEFT, "Flecha izq."},
-        {SDL_SCANCODE_RIGHT, "Flecha der."},    {SDL_SCANCODE_UP, "Flecha arriba"},     {SDL_SCANCODE_DOWN, "Flecha abajo"},
-        {SDL_SCANCODE_LSHIFT, "Mayús izq."},    {SDL_SCANCODE_RSHIFT, "Mayús der."},    {SDL_SCANCODE_LCTRL, "Ctrl izq."},
-        {SDL_SCANCODE_RCTRL, "Ctrl der."},      {SDL_SCANCODE_LALT, "Alt"},             {SDL_SCANCODE_RALT, "Alt Gr"},
-        {SDL_SCANCODE_CAPSLOCK, "Bloq Mayús"},  {SDL_SCANCODE_DELETE, "Supr"},          {SDL_SCANCODE_INSERT, "Insert"},
-        {SDL_SCANCODE_HOME, "Inicio"},          {SDL_SCANCODE_END, "Fin"},              {SDL_SCANCODE_PAGEUP, "Re Pág"},
-        {SDL_SCANCODE_PAGEDOWN, "Av Pág"},      {SDL_SCANCODE_KP_ENTER, "Intro (num.)"},
-    };
-    for (auto &e : k)
-        if (e.sc == sc) return e.es;
-    if (!strncmp(n, "Keypad ", 7)) {  // "Keypad 8" -> "8 (num.)" (varios en una misma línea: unos cuantos búferes)
-        static char buf[8][32];
+    if (ui_spanish() && !strncmp(n, "Keypad ", 7) && strcmp(n, "Keypad Enter")) {  // "Keypad 8" -> "8 (num.)"
+        static char buf[8][32];  // (several on one line: a few buffers)
         static int bi;
         char *b = buf[bi++ & 7];
         snprintf(b, sizeof buf[0], "%s (num.)", n + 7);
         return b;
     }
-    return n;
+    return trc("key", n);
 }
-static const char *pad_name(int host, int fam) {
-    const char *n = bind_pad_label(host, fam);
-    if (g_game_las) return n;
-    static const char *const tr[][2] = {
-        {"(none)", "(ninguno)"},
-        {"Minus", "Botón -"},
-        {"Plus", "Botón +"},
-        {"Left stick press", "Clic del stick izq."},
-        {"Right stick press", "Clic del stick der."},
-        {"D-pad Up", "Cruceta arriba"},
-        {"D-pad Down", "Cruceta abajo"},
-        {"D-pad Left", "Cruceta izq."},
-        {"D-pad Right", "Cruceta der."},
-        {"Capture", "Captura"},
-        {"Right paddle 1", "Pala der. 1"},
-        {"Left paddle 1", "Pala izq. 1"},
-        {"Right paddle 2", "Pala der. 2"},
-        {"Left paddle 2", "Pala izq. 2"},
-        {"Touchpad", "Panel táctil"},
-        {"View", "Vista"},
-        {"Menu", "Menú"},
-        {"LS (press)", "LS (clic)"},
-        {"RS (press)", "RS (clic)"},
-        {"Share", "Compartir"},
-        {"Cross", "Cruz"},
-        {"Circle", "Círculo"},
-        {"Square", "Cuadrado"},
-        {"Triangle", "Triángulo"},
-        {"Create", "Crear"},
-        {"Mute", "Silencio"},
-        {"Right back button", "Botón trasero der."},
-        {"Left back button", "Botón trasero izq."},
-        {"Right Fn", "Fn der."},
-        {"Left Fn", "Fn izq."},
-    };
-    for (auto &e : tr)
-        if (!strcmp(n, e[0])) return e[1];
-    return n;
-}
-static const char *input_name(int slot) {  // (la entrada de la Switch: "A", "Cruceta arriba"...)
-    const char *n = bind_input_name(slot);
-    if (g_game_las || slot < 0 || slot >= BIND_KEY_COUNT) return n;
-    static const char *const es[BIND_KEY_COUNT] = {
-        "A", "B", "X", "Y", "Clic del stick izquierdo", "Clic del stick derecho", "L", "R", "ZL", "ZR", "Botón +", "Botón -",
-        "Cruceta izquierda", "Cruceta arriba", "Cruceta derecha", "Cruceta abajo", "Stick izquierdo arriba",
-        "Stick izquierdo abajo", "Stick izquierdo izquierda", "Stick izquierdo derecha", "Stick derecho arriba",
-        "Stick derecho abajo", "Stick derecho izquierda", "Stick derecho derecha",
-    };
-    return es[slot];
-}
+static const char *pad_name(int host, int fam) { return trc("pad", bind_pad_label(host, fam)); }
+static const char *input_name(int slot) { return trc("input", bind_input_name(slot)); }  // (the Switch's: "A", "D-pad Up"...)
 static int slot_cat(int slot) {
     Bind b[16];
     for (int c = 0; c < N_CAT; c++)
@@ -163,13 +102,13 @@ static int list_devices(Device *d, int cap) {
     for (int i = 0; i < np && n < cap - 1; i++) {
         const char *nm = SDL_GetGamepadNameForID(ids[i]);
         d[n].id = ids[i], d[n].pad = true, d[n].fam = pad_fam(ids[i]);
-        snprintf(d[n].name, sizeof d[n].name, "%s", nm && *nm ? nm : T("Controller", "Mando"));
+        snprintf(d[n].name, sizeof d[n].name, "%s", nm && *nm ? nm : T("Controller", "Controller"));
         if (strlen(d[n].name) > 30) strcpy(d[n].name + 27, "...");  // (fits beside DEVICE)
         n++;
     }
     SDL_free(ids);
-    if (!n) d[n].id = 0, d[n].pad = true, d[n].fam = pad_fam(0), snprintf(d[n].name, sizeof d[n].name, "%s", T("Controller", "Mando")), n++;
-    d[n].id = 0, d[n].pad = false, d[n].fam = 0, snprintf(d[n].name, sizeof d[n].name, "%s", T("Keyboard", "Teclado")), n++;
+    if (!n) d[n].id = 0, d[n].pad = true, d[n].fam = pad_fam(0), snprintf(d[n].name, sizeof d[n].name, "%s", T("Controller", "Controller")), n++;
+    d[n].id = 0, d[n].pad = false, d[n].fam = 0, snprintf(d[n].name, sizeof d[n].name, "%s", T("Keyboard", "Keyboard")), n++;
     return n;
 }
 
@@ -219,7 +158,7 @@ static void watch_results(int fam, char *msg, size_t cap) {
     seen = serial;
     msg[0] = 0;
     if (kind == 2)
-        snprintf(msg, cap, T("%s moved to %s (swapped).", "%s pasó a %s (intercambiados)."), input_name(rother),
+        snprintf(msg, cap, T("%s moved to %s (swapped).", "%s moved to %s (swapped)."), input_name(rother),
                  rdev == BIND_DEV_PAD ? pad_name(g_bind_pad[rother], fam) : key_name(g_bind_key[rother]));
     if (kind == 1 || kind == 2 || kind == 5) settings_save();
 }
@@ -253,11 +192,11 @@ static void configure_inputs(float scale) {
         g_focus = FOCUS_CAT;
 
     opt_begin("##configure", scale);
-    opt_section(T("Configure inputs", "Configurar controles"));
+    opt_section(T("Configure inputs", "Configure controls"));
     const char *names[9];
     for (int i = 0; i < nd; i++) names[i] = devs[i].name;
     int ndi = di;
-    if (opt_choice(T("Device", "Dispositivo"), &ndi, names, nd, di, NULL)) {
+    if (opt_choice(T("Device", "Device"), &ndi, names, nd, di, NULL)) {
         bind_capture_cancel();
         g_dev_pad = devs[ndi].pad, g_dev_id = devs[ndi].id, msg[0] = 0;
     }
@@ -270,9 +209,10 @@ static void configure_inputs(float scale) {
         if (open) { if (g_cat != c) msg[0] = 0; g_cat = c, g_focus = FOCUS_RIGHT; bind_capture_cancel(); }
     }
     if (bind_is_default(dev)) opt_disable_next();
-    if (opt_action(T("Restore default controls", "Restaurar los controles"), "",
-                   g_dev_pad ? T("Puts every controller button back to its default.", "Vuelve a poner cada botón del mando como al principio.")
-                             : T("Puts every key back to its default.", "Vuelve a poner cada tecla como al principio."))) {
+    if (opt_action(T("Restore default controls", "Restore default controls"), "",
+                   g_dev_pad ? T("Puts every controller button back to its default.", "Every controller button goes "
+                                                                                      "back to its default.")
+                             : T("Puts every key back to its default.", "Every key goes back to its default."))) {
         bind_capture_cancel();
         bind_reset(dev);
     }
@@ -293,7 +233,7 @@ static void configure_inputs(float scale) {
             bool waiting = cd == dev && cs == b.slot;
             char val[64];
             if (waiting)
-                snprintf(val, sizeof val, "%s...  %d", g_dev_pad ? T("Press a button", "Pulsa un botón") : T("Press a key", "Pulsa una tecla"),
+                snprintf(val, sizeof val, "%s...  %d", g_dev_pad ? T("Press a button", "Press a button") : T("Press a key", "Press a key"),
                          (ms + 999) / 1000);
             else snprintf(val, sizeof val, "%s", g_dev_pad ? pad_name(g_bind_pad[b.slot], fam) : key_name(g_bind_key[b.slot]));
             // the same button / key on two inputs (a hand-edited larecomp.ini): red
@@ -314,51 +254,51 @@ static void configure_inputs(float scale) {
             }
         }
         g_in_right = in_right;
-        if (cd == dev) ImGui::TextDisabled("%s", T("Esc cancels.", "Esc cancela."));
+        if (cd == dev) ImGui::TextDisabled("%s", T("Esc cancels.", "Esc cancels."));
         else if (msg[0]) ImGui::TextDisabled("%s", msg);
     }
     opt_split_end();
 }
 
-// ------------------------------------------------------------------ (SMRPG) la guía: qué hace cada botón
-// Lo que hace cada botón de la Switch en Super Mario RPG, con la tecla y el botón del mando que lo dan ahora (las
-// asignaciones de quien juega: cambian con ellas). Consultado en la sección de controles de Super Mario Wiki («Super Mario
-// RPG (Nintendo Switch)», leída el 2026-11-16) y de la propia interfaz del juego (en el campo: X objetos, Y especiales,
-// + menú). Lo que no dice ninguna de las dos (la cruceta, el stick derecho, sus clics) no se cuenta. A / clic en una
-// fila: su entrada en «Configurar controles», para cambiarla.
+// ------------------------------------------------------------------ (SMRPG) the guide: what each button does
+// What each Switch button does in Super Mario RPG, with the key and the controller button bound to it now (the player's
+// bindings: it changes with them). Looked up in the controls section of Super Mario Wiki ("Super Mario RPG (Nintendo
+// Switch)", read on 2026-11-16) and in the game's own interface (on the field: X items, Y specials, + menu). What
+// neither of them says (the D-pad, the right stick, the stick clicks) is left out. A / click on a row: its entry in
+// "Configure controls", to change it.
 static void guide_list(char *out, size_t cap, const int *slots, int n, bool pad, int fam) {
     size_t k = 0;
     out[0] = 0;
     for (int i = 0; i < n && k < cap; i++) {
         int s = slots[i];
-        if (pad ? g_bind_pad[s] < 0 : g_bind_key[s] <= 0) continue;  // (sin asignar)
+        if (pad ? g_bind_pad[s] < 0 : g_bind_key[s] <= 0) continue;  // (not bound)
         k += snprintf(out + k, cap - k, "%s%s", k ? " " : "", pad ? pad_name(g_bind_pad[s], fam) : key_name(g_bind_key[s]));
     }
-    if (!out[0]) snprintf(out, cap, "(sin asignar)");
+    if (!out[0]) snprintf(out, cap, "%s", tr("(not bound)"));
 }
 static void guide_rows(void) {
     struct Row { const char *label; int slots[4]; int n, cat; const char *desc; };
     static const Row rows[] = {
-        {"Moverse", {BIND_LS_UP, BIND_LS_LEFT, BIND_LS_DOWN, BIND_LS_RIGHT}, 4, CAT_STICKS,
-         "Mario corre al moverse; manteniendo L, R, ZL o ZR, camina (el menú Sistema del juego puede invertirlo). En "
-         "combate, elige la acción y el objetivo."},
-        {"Hablar / aceptar", {BIND_A}, 1, CAT_BUTTONS, "Hablar, examinar y aceptar. En combate: atacar."},
-        {"Saltar / cancelar", {BIND_B}, 1, CAT_BUTTONS,
-         "Saltar y cancelar. En combate: las demás opciones (como defenderse o huir)."},
-        {"Objetos", {BIND_X}, 1, CAT_BUTTONS, "El menú de objetos, también en combate."},
-        {"Especiales", {BIND_Y}, 1, CAT_BUTTONS, "El menú de especiales, también en combate. Montado en Yoshi: saltar."},
-        {"Menú del juego", {BIND_PLUS}, 1, CAT_BUTTONS, "El menú del juego."},
-        {"Ataque de la barra", {BIND_MINUS}, 1, CAT_BUTTONS,
-         "En combate, con la barra de acción llena: su ataque (con tres compañeros, el ataque triple). En el castillo de "
-         "Bowser: abandonar una prueba de las puertas."},
-        {"Caminar (mantener)", {BIND_L, BIND_R, BIND_ZL, BIND_ZR}, 4, CAT_TRIGGERS,
-         "Mantener uno: caminar en vez de correr. En la lista de monstruos, L y R pasan de página."},
+        {"Move", {BIND_LS_UP, BIND_LS_LEFT, BIND_LS_DOWN, BIND_LS_RIGHT}, 4, CAT_STICKS,
+         "Mario runs when he moves; hold L, R, ZL or ZR to walk (the game's System menu can swap them). In battle, "
+         "picks the action and the target."},
+        {"Talk / confirm", {BIND_A}, 1, CAT_BUTTONS, "Talk, examine and confirm. In battle: attack."},
+        {"Jump / cancel", {BIND_B}, 1, CAT_BUTTONS,
+         "Jump and cancel. In battle: the other options (such as defending or running away)."},
+        {"Items", {BIND_X}, 1, CAT_BUTTONS, "The item menu, in battle too."},
+        {"Specials", {BIND_Y}, 1, CAT_BUTTONS, "The specials menu, in battle too. Riding Yoshi: jump."},
+        {"Game menu", {BIND_PLUS}, 1, CAT_BUTTONS, "The game's menu."},
+        {"Gauge attack", {BIND_MINUS}, 1, CAT_BUTTONS,
+         "In battle, with the gauge full: its attack (with three party members, the triple move). In Bowser's Keep: "
+         "give up one of the door challenges."},
+        {"Walk (hold)", {BIND_L, BIND_R, BIND_ZL, BIND_ZR}, 4, CAT_TRIGGERS,
+         "Hold one: walk instead of run. In the monster list, L and R turn the page."},
     };
     int fam = bind_label_family();
     for (const Row &r : rows) {
         char kb[96], pd[96], val[200];
         guide_list(kb, sizeof kb, r.slots, r.n, false, fam);
-        if (r.cat == CAT_STICKS) snprintf(pd, sizeof pd, "Stick izq.");  // (los sticks del mando no se cambian)
+        if (r.cat == CAT_STICKS) snprintf(pd, sizeof pd, "%s", tr("Left stick"));  // (controller sticks are fixed)
         else guide_list(pd, sizeof pd, r.slots, r.n, true, fam);
         snprintf(val, sizeof val, "%s · %s", kb, pd);
         ImGui::PushID(r.label);
@@ -369,9 +309,10 @@ static void guide_rows(void) {
             g_sub = true, g_cat = r.cat, g_focus = FOCUS_RIGHT, g_in_right = false;
         }
     }
-    opt_action("Menú de ajustes", "Esc / F1 · Home", "Este menú (vídeo, audio y controles). Con mando: Home, o Back + Start.");
-    opt_action("Ventana / pantalla completa", "F11 / Alt+Intro",
-               "Cambia entre la ventana y el último modo a pantalla completa (Vídeo > Modo de pantalla).");
+    opt_action("Settings menu", "Esc / F1 · Home", "This menu (video, audio and controls). On a controller: Home, "
+                                                     "or Back + Start.");
+    opt_action("Window / full screen", "F11 / Alt+Enter",
+               "Switches between the window and the last full-screen mode (Video > Display mode).");
 }
 
 // ------------------------------------------------------------------ the tab
@@ -405,50 +346,51 @@ extern "C" void controls_tab_draw(float scale) {
     }
 
     opt_begin("##controls", scale);
-    if (!g_game_las) {  // (SMRPG: en español y sin lo de Link's Awakening - mover a Link con la cruceta, 360 grados, la
-                        // luz del mando con su salud, los iconos de botones que cambian sus texturas)
-        opt_section("Teclas y botones");
+    if (!g_game_las) {  // (SMRPG: in the player's language and without the Link's Awakening parts - moving Link with
+                        // the D-pad, 360 degrees, the controller light with his health, the button icons that change
+                        // its textures)
+        opt_section("Keys and buttons");
         guide_rows();
-        opt_section("Entradas");
-        if (opt_link("Configurar controles", "Elige los botones y teclas del juego (con los nombres de la Switch: A es "
-                                             "aceptar / hablar, B saltar / cancelar). El menú siempre se abre con F1, Esc, "
-                                             "Home o Back + Start, así que ninguna asignación te deja sin él.")) {
+        opt_section("Inputs");
+        if (opt_link("Configure controls", "Choose the game's buttons and keys (with the Switch's names: A is "
+                                             "confirm / talk, B jump / cancel). The menu always opens with F1, Esc, "
+                                             "Home or Back + Start, so no binding can lock you out of it.")) {
             pick_device(keyboard_pressed());
             g_sub = true, g_focus = FOCUS_DEVICE, g_in_right = false;
         }
         take_focus(FOCUS_CONFIGURE);
-        if (opt_toggle("Mandos en segundo plano", &g_settings.bg_input, false,
-                       "Los mandos siguen funcionando aunque haya otra ventana delante."))
+        if (opt_toggle("Controllers in the background", &g_settings.bg_input, false,
+                       "Controllers keep working even when another window is in front."))
             input_apply_background();
-        opt_section("Mando");
-        if (opt_toggle("Invertir A-B", &g_settings.pad_swap_ab, false,
-                       "Intercambia A con B en el mando. Sin invertir van por posición, como en la Switch: acepta el botón "
-                       "de la derecha. Con un mando de letras de Xbox, invertidos, acepta su A y cancela su B, como dicen "
-                       "sus letras. Cambia también sus botones en «Configurar controles».")) {
+        opt_section("Controller");
+        if (opt_toggle("Swap A-B", &g_settings.pad_swap_ab, false,
+                       "Swaps A and B on the controller. Not swapped, they go by position, as on the Switch: the "
+                       "right-hand button confirms. With a controller with Xbox letters, swapped, its A confirms and "
+                       "its B cancels, as its letters say. Also swaps its buttons in \"Configure controls\".")) {
             bind_capture_cancel();
             bind_swap(BIND_A, BIND_B);
         }
-        if (opt_toggle("Invertir X-Y", &g_settings.pad_swap_xy, false,
-                       "Intercambia X con Y en el mando. Sin invertir van por posición, como en la Switch: X es el botón de "
-                       "arriba. Con un mando de letras de Xbox, invertidos, su X abre los objetos y su Y los especiales, "
-                       "como dicen sus letras. Cambia también sus botones en «Configurar controles».")) {
+        if (opt_toggle("Swap X-Y", &g_settings.pad_swap_xy, false,
+                       "Swaps X and Y on the controller. Not swapped, they go by position, as on the Switch: X is the "
+                       "top button. With a controller with Xbox letters, swapped, its X opens the items and its Y "
+                       "the specials, as its letters say. Also swaps its buttons in \"Configure controls\".")) {
             bind_capture_cancel();
             bind_swap(BIND_X, BIND_Y);
         }
-        opt_toggle("Vibración", &g_settings.rumble, true, "La vibración del mando cuando el juego la pide.");
+        opt_toggle("Rumble", &g_settings.rumble, true, "Controller rumble when the game asks for it.");
         if (g_settings.rumble) {
             static const char *const pct[] = {"25 %", "50 %", "75 %", "100 %"};
             int i = g_settings.rumble_strength / 25 - 1;
             if (i < 0 || i > 3) i = 3;
             opt_indent(1);
-            if (opt_choice("Intensidad", &i, pct, 4, 3, "La fuerza de la vibración.", false))
+            if (opt_choice("Intensity", &i, pct, 4, 3, "How strong the rumble is.", false))
                 g_settings.rumble_strength = (i + 1) * 25;
             opt_indent(-1);
         }
         {
-            static const char *const names[] = {"Como en el juego", "Como en el mando"};
-            opt_choice("Aceptar en los menús", &g_settings.menu_confirm, names, 2, MENU_CONFIRM_CONTROLLER,
-                       "Qué botón acepta en los menús de " APP_NAME " (no en los del juego).");
+            static const char *const names[] = {"As in the game", "As on the controller"};
+            opt_choice("Confirm in menus", &g_settings.menu_confirm, names, 2, MENU_CONFIRM_CONTROLLER,
+                       "Which button confirms in " APP_NAME "'s own menus (not in the game's).");
         }
         opt_end();
         return;

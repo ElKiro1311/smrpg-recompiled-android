@@ -5,7 +5,7 @@
 #include <string.h>
 #include <sys/random.h>
 
-#ifndef __ANDROID__  // (SMRPG Android: bionic tiene strlcpy, strlcat y arc4random)
+#ifndef __ANDROID__  // (SMRPG Android: bionic has strlcpy, strlcat and arc4random)
 #if !__GLIBC_PREREQ(2, 38)
 static inline size_t strlcpy(char *d, const char *s, size_t n) {
     size_t len = strlen(s);

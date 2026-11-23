@@ -96,12 +96,12 @@ int bind_label_family(void) {
 
 static void result(int kind, int dev, int slot, int other);
 
-// (SMRPG) «Invertir A-B» e «Invertir X-Y» (Controles > Mando): cada uno intercambia esos dos botones del mando en sus
-// asignaciones, así que el juego, lo que muestra Controles, larecomp.ini y reasignar a mano siguen igual. Con un mando de
-// letras de Xbox (el de la AYN Thor, por ejemplo) los de por defecto van por posición, como en la Switch (acepta el de la
-// derecha, su «B»; objetos con el de arriba, su «Y»); intercambiados, como dicen sus letras.
+// (SMRPG) "Swap A-B" and "Swap X-Y" (Controls > Controller): each one swaps those two controller buttons in the
+// bindings, so the game, what Controls shows, larecomp.ini and rebinding by hand all work as before. On a controller
+// with Xbox letters (the AYN Thor's, for example) the defaults go by position, as on the Switch (confirm is the
+// right-hand one, its "B"; items, the top one, its "Y"); swapped, they go by its letters.
 static const char *pad_ini(int h) { return h >= 0 && h < PADB_HOST_COUNT ? k_pad_ini[h] : "none"; }
-static int swap_slot(int slot) {  // la entrada cuyo botón por defecto toma `slot` con los interruptores de ahora
+static int swap_slot(int slot) {  // the entry whose default button `slot` takes with the current toggles
     if (g_settings.pad_swap_ab && (slot == BIND_A || slot == BIND_B)) return slot == BIND_A ? BIND_B : BIND_A;
     if (g_settings.pad_swap_xy && (slot == BIND_X || slot == BIND_Y)) return slot == BIND_X ? BIND_Y : BIND_X;
     return slot;
@@ -118,12 +118,12 @@ void bind_reset(int dev) {
     if (dev == BIND_DEV_PAD) memcpy(g_bind_pad, k_def_pad, sizeof g_bind_pad);
     else memcpy(g_bind_key, k_def_key, sizeof g_bind_key);
     LOG("[input] %s bindings reset to the defaults\n", dev == BIND_DEV_PAD ? "controller" : "keyboard");
-    if (dev == BIND_DEV_PAD && g_settings.pad_swap_ab) bind_swap(BIND_A, BIND_B);  // (SMRPG: los interruptores siguen)
+    if (dev == BIND_DEV_PAD && g_settings.pad_swap_ab) bind_swap(BIND_A, BIND_B);  // (SMRPG: the toggles still apply)
     if (dev == BIND_DEV_PAD && g_settings.pad_swap_xy) bind_swap(BIND_X, BIND_Y);
     result(5, dev, -1, -1);
 }
 
-// (con «Invertir A-B» o «Invertir X-Y», lo de por defecto es lo de por defecto intercambiado)
+// (with "Swap A-B" or "Swap X-Y", the default is the swapped default)
 bool bind_is_default(int dev) {
     if (dev != BIND_DEV_PAD) return !memcmp(g_bind_key, k_def_key, sizeof g_bind_key);
     for (int i = 0; i < BIND_PAD_COUNT; i++) if (g_bind_pad[i] != def_pad(i)) return false;

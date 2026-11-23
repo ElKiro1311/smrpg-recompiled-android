@@ -1,11 +1,12 @@
-// (SMRPG) Lossless Scaling Frame Generation para el port: la biblioteca aparte (tools/lsfg/lsfg_smrpg.h). Lo de aquí es
-// la parte del port; lo demás es de lsfg-vk-android (GameNative, rama release, MIT): su «framegen», y de su capa, la
-// tabla de recursos de extract.cpp, la traducción de trans.cpp y el sombreador de mipmaps que trae (mipmaps_replacement)
-// - con el traductor DXBC -> SPIR-V de DXVK (zlib) y pe-parse (MIT) que usa. Su licencia: third_party/lsfg-vk-android.
-// Nada sale de aquí como excepción: las funciones de C devuelven un código y el motivo en err. El traductor de DXVK
-// avisa con dxvk::DxvkError, que no deriva de std::exception (un Lossless.dll dañado o de otra versión): por eso los
-// sombreadores del modo pedido se traducen todos al iniciarse, y un fallo sale ahí, con su nombre, y no al crear el
-// contexto en pleno juego.
+// (SMRPG) Lossless Scaling Frame Generation for the port: the separate library (tools/lsfg/lsfg_smrpg.h). What is here
+// is the port's part; the rest is from lsfg-vk-android (GameNative, release branch, MIT): its "framegen" and, from its
+// layer, extract.cpp's resource table, trans.cpp's translation and the mipmaps shader it ships (mipmaps_replacement) -
+// with the DXBC -> SPIR-V translator of DXVK (zlib) and the pe-parse (MIT) it uses. Its license:
+// third_party/lsfg-vk-android.
+// Nothing leaves here as an exception: the C functions return a code and the reason in err. DXVK's translator reports
+// with dxvk::DxvkError, which does not derive from std::exception (a damaged Lossless.dll or one from another version):
+// that is why the shaders of the requested mode are all translated at init, and a failure comes out there, with its
+// name, and not when creating the context in the middle of the game.
 #include "lsfg_smrpg.h"
 
 #include "common/exception.hpp"
@@ -19,7 +20,7 @@
 #include <thirdparty/spirv.hpp>
 #include <util_error.h>
 
-#include <volk.h>  // (sus punteros: el de vkCreateComputePipelines se cambia por pc_create)
+#include <volk.h>  // (its pointers: the one for vkCreateComputePipelines is replaced with pc_create)
 
 #include <algorithm>
 #include <cstdint>
@@ -43,8 +44,8 @@
 
 namespace {
 
-// (de lsfg-vk src/extract/extract.cpp) el recurso RT_RCDATA de Lossless.dll con el DXBC de cada sombreador; los «p_»,
-// los del modo rendimiento (LSFG_3_1P los pide con ese nombre)
+// (from lsfg-vk src/extract/extract.cpp) the RT_RCDATA resource of Lossless.dll with each shader's DXBC; the "p_" ones,
+// performance mode's (LSFG_3_1P asks for them by that name)
 const std::unordered_map<std::string, uint32_t> kNameIdx = {{
     {"mipmaps", 255}, {"alpha[0]", 267}, {"alpha[1]", 268}, {"alpha[2]", 269}, {"alpha[3]", 270},
     {"beta[0]", 275}, {"beta[1]", 276}, {"beta[2]", 277}, {"beta[3]", 278}, {"beta[4]", 279},
@@ -60,11 +61,11 @@ const std::unordered_map<std::string, uint32_t> kNameIdx = {{
     {"p_generate", 256},
 }};
 
-std::unordered_map<uint32_t, std::vector<uint8_t>> g_res;     // (los recursos leídos de Lossless.dll)
-std::unordered_map<std::string, std::vector<uint8_t>> g_spv;  // (los sombreadores del modo, ya traducidos)
+std::unordered_map<uint32_t, std::vector<uint8_t>> g_res;     // (the resources read from Lossless.dll)
+std::unordered_map<std::string, std::vector<uint8_t>> g_spv;  // (the mode's shaders, already translated)
 bool g_perf, g_orig_mipmaps;
-// initializeExternal lanzó a medias en ese modo (0 calidad, 1 rendimiento): deja su instancia puesta sin dispositivo,
-// su finalize no la quita y los init siguientes volverían sin hacer nada; solo se arregla cerrando el juego
+// initializeExternal threw halfway in that mode (0 quality, 1 performance): it leaves its instance set with no device,
+// its finalize does not remove it and later inits would return without doing anything; only closing the game fixes it
 bool g_lib_broken[2];
 
 int on_resource(void *, const peparse::resource &res) {
@@ -75,7 +76,7 @@ int on_resource(void *, const peparse::resource &res) {
     return 0;
 }
 
-// (de lsfg-vk src/extract/trans.cpp) DXBC -> SPIR-V con el compilador de DXVK; los bindings, renumerados 0..n-1
+// (from lsfg-vk src/extract/trans.cpp) DXBC -> SPIR-V with DXVK's compiler; the bindings, renumbered 0..n-1
 struct BindingOffsets {
     uint32_t bindingIndex{}, bindingOffset{}, setIndex{}, setOffset{};
 };
@@ -112,13 +113,13 @@ std::vector<uint8_t> translate(const std::vector<uint8_t> &bytecode) {
     std::copy_n(reinterpret_cast<uint8_t *>(code.data()), code.size(), spirv.data());
     return spirv;
 }
-// (el error del traductor, a uno que sí deriva de std::exception y nombra el sombreador)
+// (the translator's error, into one that does derive from std::exception and names the shader)
 std::vector<uint8_t> translate_named(const std::string &name, const std::vector<uint8_t> &bytecode) {
     try {
         return translate(bytecode);
     } catch (const dxvk::DxvkError &e) {
-        throw std::runtime_error("el sombreador " + name + " de Lossless.dll no se pudo traducir (" + e.message() +
-                                 "): ¿Lossless.dll dañado o de otra versión?");
+        throw std::runtime_error("the shader " + name + " of Lossless.dll could not be translated (" + e.message() +
+                                 "): is Lossless.dll damaged or from another version?");
     }
 }
 
@@ -130,9 +131,9 @@ std::vector<uint8_t> load_shader(const std::string &name) {
     auto spv = g_spv.find(name);
     if (spv != g_spv.end()) return spv->second;
     auto hit = kNameIdx.find(name);
-    if (hit == kNameIdx.end()) throw std::runtime_error("sombreador desconocido: " + name);
+    if (hit == kNameIdx.end()) throw std::runtime_error("unknown shader: " + name);
     auto res = g_res.find(hit->second);
-    if (res == g_res.end()) throw std::runtime_error("falta el sombreador " + name + " en Lossless.dll");
+    if (res == g_res.end()) throw std::runtime_error("missing shader " + name + " in Lossless.dll");
     return translate_named(name, res->second);
 }
 
@@ -140,17 +141,18 @@ void set_err(char *err, int len, const std::string &msg) {
     if (err && len > 0) snprintf(err, (size_t)len, "%s", msg.c_str());
 }
 
-// ---- caché de tuberías. LSFG crea las suyas (una por sombreador: unas 20 de cómputo) sin caché, al crear el primer
-// contexto tras iniciarse, y en la Adreno de la AYN Thor eso tardaba 0,75-1,2 s: el parón al activarla en cada partida.
-// Tras su initializeExternal (que carga los punteros de volk del dispositivo, también los de cada init siguiente), su
-// vkCreateComputePipelines pasa a ser pc_create, que les da una VkPipelineCache leída de cache_path si su cabecera es de
-// esta GPU y este controlador; se guarda si cambió después de crear cada contexto, y se cierra en finalize.
+// ---- pipeline cache. LSFG creates its own pipelines (one per shader: about 20 compute ones) without a cache, when
+// creating the first context after init, and on the AYN Thor's Adreno that took 0.75-1.2 s: the stall on turning it on
+// in every session. After its initializeExternal (which loads volk's device pointers, also the ones of every later
+// init), its vkCreateComputePipelines becomes pc_create, which gives them a VkPipelineCache read from cache_path if its
+// header is from this GPU and this driver; it is saved if it changed after creating each context, and closed in
+// finalize.
 PFN_vkCreateComputePipelines g_ccp_orig;
 VkPipelineCache g_pc;
 VkDevice g_pc_dev;
 std::string g_pc_path;
 size_t g_pc_saved;
-constexpr size_t kPcMax = 64u << 20;  // (más que esto en el archivo: dañado o de otra cosa; se empieza de cero)
+constexpr size_t kPcMax = 64u << 20;  // (more than this in the file: damaged or something else's; start from scratch)
 
 VKAPI_ATTR VkResult VKAPI_CALL pc_create(VkDevice dev, VkPipelineCache cache, uint32_t n, const VkComputePipelineCreateInfo *ci,
                                          const VkAllocationCallbacks *alloc, VkPipeline *out) {
@@ -158,13 +160,13 @@ VKAPI_ATTR VkResult VKAPI_CALL pc_create(VkDevice dev, VkPipelineCache cache, ui
     return g_ccp_orig(dev, cache, n, ci, alloc, out);
 }
 
-// la cabecera (VkPipelineCacheHeaderVersionOne) es de esta GPU y de este controlador
+// the header (VkPipelineCacheHeaderVersionOne) is from this GPU and this driver
 bool pc_header_ok(const std::vector<uint8_t> &d, VkPhysicalDevice phys) {
     if (d.size() < 16 + VK_UUID_SIZE || !vkGetPhysicalDeviceProperties) return false;
     VkPhysicalDeviceProperties p{};
     vkGetPhysicalDeviceProperties(phys, &p);
     uint32_t h[4];
-    memcpy(h, d.data(), sizeof h);  // tamaño de la cabecera, versión, vendorID, deviceID
+    memcpy(h, d.data(), sizeof h);  // header size, version, vendorID, deviceID
     return h[0] >= 16 + VK_UUID_SIZE && h[0] <= d.size() && h[1] == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
            h[2] == p.vendorID && h[3] == p.deviceID && !memcmp(d.data() + 16, p.pipelineCacheUUID, VK_UUID_SIZE);
 }
@@ -183,7 +185,7 @@ void pc_save() {
     bool ok = fwrite(d.data(), 1, sz, f) == sz;
     ok = fclose(f) == 0 && ok;
     if (ok) {
-        remove(g_pc_path.c_str());  // (en Windows rename no pisa; cortarse aquí pierde la caché, nunca la daña)
+        remove(g_pc_path.c_str());  // (Windows rename does not overwrite; a cut here loses the cache, never damages it)
         ok = rename(tmp.c_str(), g_pc_path.c_str()) == 0;
     }
     if (ok) g_pc_saved = sz;
@@ -220,7 +222,7 @@ void pc_open(const LsfgSmrpgInit *in) {
         ci.initialDataSize = d.size();
         ci.pInitialData = d.empty() ? nullptr : d.data();
         if (vkCreatePipelineCache(in->device, &ci, nullptr, &g_pc) != VK_SUCCESS) {
-            ci.initialDataSize = 0;  // (datos que el controlador no acepta: una vacía)
+            ci.initialDataSize = 0;  // (data the driver does not accept: an empty one)
             ci.pInitialData = nullptr;
             if (vkCreatePipelineCache(in->device, &ci, nullptr, &g_pc) != VK_SUCCESS) g_pc = VK_NULL_HANDLE;
         }
@@ -244,26 +246,28 @@ LSFG_SMRPG_API int lsfg_smrpg_abi(void) { return LSFG_SMRPG_ABI; }
 LSFG_SMRPG_API int lsfg_smrpg_init(const LsfgSmrpgInit *in, char *err, int errlen) {
     try {
         if (!in || !in->dll_path || !in->gipa || in->generations < 1 || in->flow_scale <= 0) {
-            set_err(err, errlen, "parámetros no válidos");
+            set_err(err, errlen, "invalid parameters");
             return -1;
         }
         const int mode = in->performance != 0;
         if (g_lib_broken[mode]) {
-            set_err(err, errlen, "ya falló al iniciarse en este modo y no se deja iniciar otra vez: cierra el juego y vuelve a abrirlo");
+            set_err(err, errlen, "it already failed to start in this mode and cannot be started again: close the game "
+                                 "and open it again");
             return -5;
         }
         g_res.clear();
         g_spv.clear();
         peparse::parsed_pe *dll = peparse::ParsePEFromFile(in->dll_path);
         if (!dll) {
-            set_err(err, errlen, std::string("no se pudo leer ") + in->dll_path);
+            set_err(err, errlen, std::string("could not read ") + in->dll_path);
             return -2;
         }
         peparse::IterRsrc(dll, on_resource, nullptr);
         peparse::DestructParsedPE(dll);
         for (const auto &[name, idx] : kNameIdx)
             if (g_res.find(idx) == g_res.end()) {
-                set_err(err, errlen, "a Lossless.dll le falta el sombreador " + name + ": ¿Lossless Scaling al día?");
+                set_err(err, errlen, "Lossless.dll lacks the shader " + name + ": is Lossless Scaling up to "
+                                                                                       "date?");
                 return -3;
             }
         g_perf = mode != 0;
@@ -283,7 +287,7 @@ LSFG_SMRPG_API int lsfg_smrpg_init(const LsfgSmrpgInit *in, char *err, int errle
             g_lib_broken[mode] = true;
             throw;
         }
-        pc_open(in);  // (después: su volkLoadDevice acaba de poner los punteros del dispositivo)
+        pc_open(in);  // (afterward: its volkLoadDevice has just set the device's pointers)
         return 0;
     } catch (const std::exception &e) {
         set_err(err, errlen, e.what());
@@ -292,7 +296,7 @@ LSFG_SMRPG_API int lsfg_smrpg_init(const LsfgSmrpgInit *in, char *err, int errle
         set_err(err, errlen, e.message());
         return -4;
     } catch (...) {
-        set_err(err, errlen, "error desconocido al iniciarse");
+        set_err(err, errlen, "unknown error at startup");
         return -4;
     }
 }
@@ -304,7 +308,7 @@ LSFG_SMRPG_API int lsfg_smrpg_create(const VkImage in[2], const VkImage *out, in
         VkExtent2D ext{w, h};
         int ctx = g_perf ? LSFG_3_1P::createContextFromImages(in[0], in[1], outs, ext, fmt)
                          : LSFG_3_1::createContextFromImages(in[0], in[1], outs, ext, fmt);
-        if (ctx >= 0) pc_save();  // (sus tuberías ya están: si la caché cambió, a disco)
+        if (ctx >= 0) pc_save();  // (its pipelines exist by now: if the cache changed, to disk)
         return ctx;
     } catch (const std::exception &e) {
         set_err(err, errlen, e.what());
@@ -313,7 +317,7 @@ LSFG_SMRPG_API int lsfg_smrpg_create(const VkImage in[2], const VkImage *out, in
         set_err(err, errlen, e.message());
         return -1;
     } catch (...) {
-        set_err(err, errlen, "error desconocido al crear el contexto");
+        set_err(err, errlen, "unknown error creating the context");
         return -1;
     }
 }
@@ -334,7 +338,7 @@ LSFG_SMRPG_API int lsfg_smrpg_present(int ctx, char *err, int errlen) {
         set_err(err, errlen, e.message());
         return -1;
     } catch (...) {
-        set_err(err, errlen, "error desconocido al generar");
+        set_err(err, errlen, "unknown error while generating");
         return -1;
     }
 }
@@ -349,7 +353,7 @@ LSFG_SMRPG_API void lsfg_smrpg_destroy(int ctx) {
 
 LSFG_SMRPG_API void lsfg_smrpg_finalize(void) {
     try {
-        pc_close();  // (antes que LSFG: guarda la caché y deja su vkCreateComputePipelines como estaba)
+        pc_close();  // (before LSFG: saves the cache and leaves its vkCreateComputePipelines as it was)
         LSFG_3_1P::finalize();
         LSFG_3_1::finalize();
     } catch (...) {

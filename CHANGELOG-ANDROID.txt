@@ -1,0 +1,709 @@
+CHANGELOG OF THE SUPER MARIO RPG PORT FOR ANDROID (smrpg-recomp-android)
+========================================================================
+Newest first. Numbering x.y.z-alpha / x.y.z-beta (Semantic Versioning, like the Windows port): alpha as long as the game
+can't be played from start to finish on Android, beta after that (versions up to 0.9.0 were named -alfa). The APK carries
+this version (tools/android/apk.sh: versionName; versionCode = x*10000 + y*100 + z).
+Base: the Windows port 0.48.0-beta (https://github.com/ElKiro1311/smrpg-recompiled; CHANGELOG.txt has its history up to
+there).
+
+0.10.0-alpha (2026-11-23) — everything in English, and the menu in English and Spanish
+  1. The repository is now in English: code comments, log messages, scripts, file names and documents. The README is also in
+     Spanish (README.es.md). Version suffixes are -alpha / -beta from here on (they were -alfa).
+  2. The settings menu is in English, and in Spanish when the game's language is Spanish (Video > Game language; with
+     "Automatic", the system's own). It changes right away; the game's own text, the next time it opens. The code has the
+     English texts and runtime/ui/lang_es.inc the Spanish ones (tr(), runtime/ui/tr.h; tools/check_lang.py).
+  3. New names, in English: the HD texture folders, textures/ and textures-dump/, and the test environment file, env.txt. The
+     earlier ones (texturas/, texturas-volcadas/, entorno.txt) still work; the app moves its own copy of the game code.
+  4. The game code built for 0.9.x (lasgame.so) still works: in what it is built from only comments changed, so it keeps its
+     id (GAMELIB_SAME in the Makefile).
+  5. The test scripts of tools/android ask for SAVE= and write to build/android-tests.
+
+0.9.1-alpha (2026-11-23) — first published APK
+  1. The APK is no longer built in debug mode (APK_DEBUG=1 tools/android/apk.sh brings it back).
+  2. Opus and FFmpeg are built without any path of the PC that compiled them (tools/android/deps.sh).
+  3. The Android port now lives in its own repository, with its own releases:
+     https://github.com/ElKiro1311/smrpg-recompiled-android
+
+0.9.0-alfa (2026-11-22) — the app is called SMRPG Recomp; the branch, ready to go public
+  1. The app's name: SMRPG Recomp (previously, the game's full name). The package (org.smrpgrecomp.android), its data
+     folder, the saves and the settings don't change.
+  2. Each PC's tool paths (Android SDK, NDK, JDK, the Python that assembles the APK, an already downloaded FFmpeg) are
+     no longer in the Makefile or in tools/android/apk.sh, deps.sh and tools/lsfg/build.sh: they come from the
+     environment or from local.env, which git ignores (local.env.example; tools/local_env.sh). Without them, each one
+     says what's missing. deps.sh copies the Vulkan headers from /ucrt64 (not from C:\msys64) and uses however many
+     threads there are.
+  3. APK licenses: the notices for Vulkan Memory Allocator, the audio ported from Ryujinx and AMD FSR 1, and the legal
+     notice in LICENSES.txt. The test scripts in tools/android ask for the test save (SAVE=) and write to
+     build/android-pruebas.
+  4. What the repository shares with PC (README with this branch's guide, legal notice, pure MIT LICENSE, .gitignore,
+     .gitattributes, the PC installer that asks for the already extracted copy): see 0.51.0-beta in CHANGELOG.txt
+     (main).
+
+0.8.11-alfa (2026-11-20) — the vertex cache without OS tracking: shadow comparison
+  0.8.10 relied on the OS's per-page write tracking (GetWriteWatch on Windows, uffd or PAGEMAP_SCAN on Linux)… and the
+  Thor has neither ("[vk] no page write tracking (-1, page 4096)": no userfaultfd and no PAGEMAP_SCAN): the cache stayed
+  off and the excess upload remained. Now, without tracking, the cache goes by SHADOW COMPARISON: each entry keeps its
+  own copy in RAM, and each present compares page by page (memcmp) and copies to the GPU only the pages that changed; if
+  there's no memory for the shadow, no entry is made (the usual copying); pages written by the GPU are still excluded
+  (the marks from the shaders' stores work without the OS); teardown frees the shadows. LARECOMP_VK_VCACHE still has the
+  last word. MEASURED on the Thor (Mushroom Way, its fsr1/smaa/1x/60 settings): the same scene uploaded 13.9 KB per draw
+  without the mode and 10.5 KB with it (−24%): the static part (the terrain) is saved, while whatever the game rewrites
+  every frame (animated meshes, constants) is still uploaded. A steady 60 fps, GPU at 475 MHz with no throttling
+  (thermal_pwrlevel 0), until the usual thermal shutdown. And a "flicker" was rechecked with the same game settings:
+  110 s cold + 170 s at the thermal limit, recorded at 30/s — not a SINGLE drop in sharpness outside the game's own
+  loads/menus/transitions, and the clues in its log (the four "[pace] resolution setting changed" and the two SMAA
+  stencil sizes) are just changes made in the menu (pace.c confirms it); which area it happens in is still to be found
+  out.
+
+0.8.10-alfa (2026-11-20) — the excess upload: vertices and indices through the page cache, not copied every frame
+  The problem, measured: the Thor uploaded ~334 MB/s at 60 fps (667 MB every 2 s, ~20 KB for each of the window's 32,670
+  draws) and the S23 ~470 MB/s (~11 MB per frame). The cause: on the Adreno the game's heap can't be imported as a
+  Vulkan buffer ("lazy heap import: not possible here (no host memory import)"), so every vertex, index and constant
+  landed in the transient ring AND WAS COPIED AGAIN EVERY FRAME (guest_copy's cache only lives within one present). The
+  PC doesn't suffer from this: it imports the heap (its draws go direct; its ~15 MB/frame upload is the per-draw
+  constants, already covered by the present's dedupe). The fix: the vertex page cache (vcache_lookup, with the OS's
+  per-page write tracking) already existed for this case but was only consulted on the import path, which Android
+  doesn't have — now a vertex or index miss consults it before copying: the first frame copies the whole range and the
+  following ones only the pages the OS saw written; pages written by the GPU are excluded (skinning), and without
+  tracking or with the cache off the usual path remains. LARECOMP_VK_VCACHE=0/1 still has the last word. Verified on PC
+  (hidden): identical (same 1,899 MB/2 s upload, 0 cache hits since it goes direct there, screenshot with a diff of 0.4
+  and 0/880 blocks against the baseline). STILL TO BE MEASURED on the Thor and the S23 once they're available: upload
+  before/after, fps, temperature and GPU frequency (devfreq/cur_freq, gpu_busy_percentage).
+
+0.8.9-alfa (2026-11-20) — frame generation off by default on Android, with a warning in the menu
+  Requested: on the Thor, frame generation makes things worse (from ~100 real fps it drops to 60, and it adds latency).
+  On Android it's now OFF by default, even with an old larecomp.ini that had it on: the ini's "lsfg" key is now read
+  only on PC (backward compatible); on Android the new "lsfg_mult" key rules, and only the menu can write it, from this
+  version on — whatever the player picks from here on is always respected, and saving writes both keys so that
+  downgrading keeps the choice too. Nothing changes on PC: its ini is read the same way, and without the new key it
+  behaves as always. In the option's impact box, three new warning lines in Spanish (the menu's Latin-1 font): it's only
+  worth it if the game runs below 60 fps; it pins the real frames to the display's rate divided by the multiplier (at
+  120 Hz with x2, 60 real fps); and it always adds latency (at least one real frame, plus however long generating
+  takes).
+
+Sweeping and pre-translating the ~82,000 shaders on the Thor (2026-11-20) — studied with a sample: NOT WORTH IT
+  The idea: run tools/shader_sweep.c (which links the runtime's own translator and compiles to SPIR-V with shaderc) over
+  the RomFS packages, in batches and in the background on the Thor, so that anything never seen before arrives already
+  translated. Real sample on PC (300/package over shaders/pkg): 672 shaders in 2.35 s = 286/s single-threaded, 13
+  translation failures (3 unknown opcodes, ~2%). Extrapolated: ~82,000 in ~5 min on PC, or ~48 s on the Thor with
+  0.8.2's pool of 6 (plus a session's worth of heat); the cached SPIR-V would take up some 250-400 MB. BUT the split
+  measured in the first-visit storms kills it: the castle = 4-8 PROGRAMS translated versus 216 PIPELINES created by the
+  driver (worst frame 366 ms; battles: 140 on the Thor, 289 on PC). Translation — the only thing the sweep saves — is
+  milliseconds, already parallelized; the black flash lives in the driver's 216+ creations, which are shader × STATE
+  (blends, formats the game picks while playing): they can't be pre-derived from the packages, and the pipeline cache is
+  GPU-specific — the PC can't donate its own to the Adreno. Pre-translating everything would attack the cheap part. What
+  does attack the expensive part: warming up the driver's cache ON the console by creating the real pipelines, and that
+  already exists: LARECOMP_SHADER_TOUR (warping through every warp spot compiles them and leaves them in
+  vk_pipelines.bin) — hours of play on the console, a separate decision. Idea noted and ruled out by the numbers.
+
+Runtime warnings and paths not yet looked at (2026-11-20, after the robustness tests)
+  1. WARNINGS (all the logs from the runs, Thor and PC, counted by type): "stub" ~1,000 = the bsd:u/ssl/nifm:u services
+  without HLE that answer "ok" locally (benign offline; the game uses no real network) and the loader's "relocated ...
+  host stubs" (by design); "not supported" 97 = the controller's VIBRATION MOTOR can't be reached through SDL on the
+  Thor (every boot hits it once: the game's rumble doesn't work there — a missing feature, not a bug; noted); "failed" =
+  the 4 pipeline codes already documented (0.8.3) and 5 "present failed: SURFACE_LOST" — ALL when going to the
+  background, expected and handled (the lifecycle withstands them); "warn" ×2 per boot = the device's capabilities,
+  informational; the 2 "FATAL" in the count = old logs from November 18 (v2 era). Nothing real to fix.
+  2. PATHS NOT YET LOOKED AT (menus, battle, movie; aligned Thor↔PC screenshots with compara_zonas.py): the menus (X
+  items, Y specials, +) IDENTICAL (diff 0.6-1.9; 0-2 blocks of 880); the title movie PIXEL-IDENTICAL (diff 0.0 on the
+  aligned frame) and its bright scenes on par (80.5/79.9 versus 81.0/79.9); the movie's audio played on BOTH
+  (audren+audout open, a constant 60 fps — the whole machinery; fine sync can't be heard from a log); the BATTLE
+  happened on both (Thor: 140 pipelines compiled on the way in; PC: 289) and both survived it at 60 fps without errors.
+  No difference to fix.
+  3. The only loose end: one PC run (PC only) went quiet at t=50 s, halfway through the walk to the encounter — the
+  process exited silently (no dump from the hang watchdog, no Windows crash event, no FATAL) and it did NOT reproduce in
+  5 more runs (two long battles included). At that rate it stays noted as a loose end to watch; if it comes back, the
+  hang dump (LARECOMP_HANG_DUMP, already armed by default) will say where. SYSTEMATIC HUNT (2026-11-20, after this): 20
+  identical hidden PC runs with the long walk to the Goomba and LARECOMP_HANG_DUMP=20 — all 20 entered battle (a storm
+  of 289 pipelines in the first one of each; the following ones, already cached) and all 20 reached the end of the log
+  with no hang and no dump: ~26-30 battle entries that day with the only hang in the first one. NOT REPRODUCIBLE on that
+  budget: noted as a rare PC loose end, and the hunt stops; if it happens again, the dump will say where.
+
+Robustness tests (2026-11-20, after 0.8.8)
+  1. LONG SESSION (30 min planned; the thermal ceiling rules): at continuous 1080p the chassis (xo) hits the watchdog's
+  limit (55 °C) in ~7-10 min depending on the starting temperature, even though the CPU no longer gets near its cutoff
+  (75 °C where it used to be 95). Delivered as a 7 min slice with RSS every 30 s (long_session.sh): NO LEAK — RSS starts
+  at 2.78 GB, loads up to 3.10 GB and then the increments SHRINK (+2.7 MB/min → +0.2 MB/min: the working set settling,
+  not the linear signature of a leak); 60.0 fps from start to finish (the only dip, the startup ramp), 0 Vulkan errors,
+  0 skipped draws. (A continuous 30 min session is physically impossible with the thermal protection: that is itself
+  part of the result.)
+  2. LIFECYCLE (lifecycle.sh): 10 times to the background (Home) and back — the task returns to the front, and the
+  process and rendering survive all 10 cycles (constant pid, clean final screenshot, 0 errors) — and the screen off and
+  on 3 times, same result. Unplugging and replugging the controller can't be simulated over adb: left untested.
+  3. SAVING THE ROUGH WAY (save_and_cover.sh): the remake only writes the save when you TOUCH a save block — neither
+  walking (60 s right, 60 s left, 7 min back and forth with battles) nor fighting triggers the autosave (the save's md5
+  intact in all of them), and the block can't be reached blindly with scripted input. What was verified: a brutal
+  force-stop mid-game ×3 — a clean reload EVERY time (60 fps in the field, 0 errors, in-game screenshot), and the
+  player's save (written by the game itself) loads on every boot. Left to test by hand (10 s): touching a save block and
+  closing right after — the fresh write against the force-stop.
+  Scripts added to the repo (tools/android/): long_session.sh (RSS per minute + monitoring), lifecycle.sh,
+  save_and_cover.sh. No degradation of the game found: no fix to cut a version for.
+
+0.8.8-alfa (2026-11-20) — ui_run's loop per platform (correction to 0.8.7); audio-out no longer polls
+  1. (correction) The new window loop was the default everywhere, and on PC SDL_WaitEventTimeout really sleeps and wakes
+  up as each event arrives: better latency than a fixed 16 ms cadence at 120-240 fps. Now Android uses the new one (main
+  thread at 0.4%) and the other platforms the per-event wait; LARECOMP_UI_SPIN=0/1 forces either one on any platform.
+  Verified on PC (hidden): f01out at 60 fps, 0 errors, scripted input working; Thor: same thread map as 0.8.7 (148%).
+  2. The audio output thread no longer polls the queue every 1 ms when there's nothing in it: it waits on a condition,
+  woken when a buffer is queued and also on Start/Stop and at shutdown (without that last signal the join would hang).
+  In normal play it stays at 1.4%: that's the real rate at which it releases the buffers, by design (releasing them
+  instantly would be a hot loop in the game's own audio thread). What's gone is the dead polling BETWEEN sessions
+  (menus, loads): a thousand wakeups per second for nothing.
+  3. Measured on the Thor (f01out standing still, hilos_thor.sh with names): total CPU 148% (0.8.7: 151%), main thread
+  out of top's list (<0.8%), audio-out 1.4% with playback running. (An 82% that shows up ONLY in the first session after
+  reinstalling the APK is a startup transient: it isn't there in the following ones.)
+  4. And the remaining CPU use, measured and closed: turning the recorder off (LARECOMP_VK_RECORDER=0, the Vulkan calls
+  on the draw thread itself) gives EXACTLY the same (148% versus 148%; rqueue 24% + recorder 18% separate = 40.2%
+  merged): the ring has no net cost and the two-thread pipeline buys parallelism — it stays. guest-main (50%) is the
+  game itself (41k function calls per frame) on the generated C (the translator's c->x[] register file: its multiplier
+  is the GENERATOR's business, not the runtime's); rqueue/recorder (24/18%) are its 713 draws per frame. On the runtime
+  side, exhausted.
+
+0.8.7-alfa (2026-11-20) — half the heat: the main thread no longer spins on Android
+  With the game idle at 1080p, the Thor used 253-343% CPU (top -H) and the CPU reached 95 °C in two minutes (the
+  watchdog cut the session short). The per-thread map — hilos_thor.sh, now with each thread's name (/proc): the runtime
+  now names its threads (plat_thread_name: guest-main/guest-N, vi-vsync, rqueue, recorder, shader-prep, seen-writer,
+  shader-trans/build, cache-saver, audio-ren/out, disp-watch, hang-watch) — gave the culprit away: the app's MAIN thread
+  at 99.8% (a third of the heat), with the game doing nothing. It was ui_run's loop (device.c):
+  "SDL_WaitEventTimeout(&e, 16)" doesn't sleep on Android — it spins. Now the loop collects the pending events in one go
+  (PeepEvents), does its periodic work and really sleeps until its next tick on the runtime's timer. Input loses nothing
+  noticeable: the game reads it once per frame. LARECOMP_UI_SPIN=1: the old loop, for comparison.
+  Measured (same 120 s run from cold): main thread 99.8% → 0.4%; total CPU 253-343% → 151%; the rest is real work
+  (guest-main 50%, rqueue 24%, recorder 18%); CPU 63→95 °C before → 60→77 °C after (no longer anywhere near the cutoff);
+  xo +16.8 before → +10.7 after over 120 s; 60 fps intact (median 60, better minimum).
+  Residual, noted: audio-out 1.4% even with LARECOMP_NO_AUDIO=1 (it releases buffers at its own pace; minor).
+
+0.8.6-alfa (2026-11-20) — the image edge, from PC 0.49.1-beta (main)
+  The first row and the last column of the game's final image came out half-blended with black: its own post chain
+  leaves that edge of its buffers unwritten and its blit blends it in. The runtime's "present" now replicates the edge
+  (shaders.c present.frag: the outer sample lands on the center of the second texel, clamped to 1.5 texels) and
+  screenshots take the same path (exec.c: pc[9]/pv[9]). Taken from PC, without the original commit's debug machinery
+  (LARECOMP_SHOT_RAW/DEBUG_PASS_STRIDE). LARECOMP_NO_EDGE_FIX=1 turns it off, for comparison.
+  Measured with analiza_borde.py (the edge's brightness against its neighbor; "before" = d03out-par_2700.png, PC without
+  the fix): PC before, row0 0.82 / last column 0.63; PC and Thor after, 1.00 / 1.00 and a PIXEL-EXACT REPLICA (row0 =
+  row1 and col-1 = col-2 at 100%). Thor: 3 clean screenshots, 0 Vulkan errors, 0 skipped draws.
+  Quality tour afterwards (8 areas: f01out d01f1c d02out d03out m01c1f1a d04b1 + the new d04out and f03out, test saves
+  with _respawn_floor_name; tabla_recorrido.py/compara_zonas.py/negros.py): no anomalies in any of them — 0 Vulkan
+  errors, 0 crashes, aligned Thor↔PC pairs at diff 5.5-6.5 (19-31 blocks of 880) in all 8, per-area blacks on par with
+  PC (the peaks are transition fades caught halfway), and the skipped draws/hitches on entry = first-visit compiles
+  already documented (m01c1f1a 2,406 skipped; d04out 520; the rest ≤1,067). No black draws, broken textures or
+  Adreno-specific flicker: there's no 0.8.7, none is needed.
+
+0.8.5-alfa (2026-11-20) — hitches: the mechanism, settled for real (and the last runtime fix, measured and ruled out)
+  1. The game's GPU counters are DORMANT in normal play: a 2,500-frame window with LARECOMP_FNPROF (6,132 functions
+     counted) and the counter's entire family (the initializer 0x70010c4c24, the getter 0x70010c51f0, its vtable
+     trampolines 0x70010c1exx: zero entries). The "the controller reads renderer+0x81c0" story belonged to the Link
+     game: in SMRPG that path doesn't run and the drop doesn't come from there. (The name "f_700000c910" in the
+     pace.c/patches.py notes is Link's; SMRPG's 7001'… ones really are its own.)
+  2. The hitch's signature, measured cleanly: the game's frame floats within ±1-5.5 ms of its own clock, and when it
+     lands past a vsync tick it waits ONE WHOLE REFRESH and presents on the next one (a "+2" in [pacing]; the controller
+     in 30 mode during that frame). In the field: 3 pure tick misses in 5,307 frames (tirones-pace) ≈ one every 29 s —
+     exactly 0.7.7's cadence. The other "+2"s are the game's own 21-400 ms frames (loads and startup: there 30 is
+     right). During the hitch the ENTIRE runtime is idle (game CPU 0.7-1.6 ms, real GPU 2-3 ms, pacer with nothing
+     late): the game misses the deadline all by itself, on correct data. The runtime is no longer feeding it anything
+     wrong.
+  3. Tried and ruled out, with numbers (built, run, reverted): (a) a grid at the panel's REAL rate — measured from 6,556
+     pairs of presents: 16.6530 ms on average (the driver says 16.6667; −0.082%; crossings every ~600 frames) — the
+     average game↔vsync drift fell from 0.08% to 0.002%... and the tick misses stay the same (5 in 5,300, versus 3
+     before); (b) the same + vsync events 4 ms BEFORE the grid (the game's jitter would land inside the tick): first run
+     0 misses in 5,137, second 4 in 4,855 — the same binary; thermal swings dominate and the improvement doesn't hold
+     up. The panel's rate really was off and the pacer now knows how to measure it (the recipe is below); but the game's
+     hitch doesn't come from there.
+  4. What's left to try, if it's ever to be killed off for good: the hle_override hook (movie_fit.c's pattern) on the
+     game's controller, so that a one-frame miss doesn't drop it to 30 (it's an internal decision of its own, on data
+     that's served correctly: it means touching its code, not the runtime). Or accept it as the game's own: its ±1-5 ms
+     of jitter per frame with the CPU at 95 °C is the ultimate cause and couldn't be reduced from the outside.
+     (Measurement recipe, in case it's reused: LARECOMP_VK_PACING_LOG gives the [pacing] p/d lines; the "pure tick
+     miss" = a g_vsync step >25 ms with the game's frame <25 ms; the real refresh = the mean of the gaps between the
+     [pacing] p lines within an 8-25 ms band.)
+
+0.8.4-alfa (2026-11-20) — 28-38 ms hitches every 30-40 s: avenue explored and ruled out (the numbers remain)
+  1. The hitches are the game's own controller dropping to its 30 mode for ONE frame: its main thread waits 2 vsyncs and
+     comes back. Measured in f01out while walking (LARECOMP_LOG_PACE + raw [pacing]): in every hitch the entire runtime
+     is idle — game CPU 0.7-1.6 ms, render ≤1 ms, real GPU 2-3 ms, pacer with no late presents (17-25 ms margins),
+     SyncWait immediate — and the frame before the drop is normal too (period 15.6-17.1).
+  2. Ruled out with the numbers: Unity's GC (the 15 frames with the most game-thread CPU out of 7,200 are startup and
+     loading artifacts: none of them periodic); cache saving and the log (no I/O in the frame); the GPU frequency (a
+     steady 615/680 MHz, no drops); the NVN counter query (SMRPG doesn't use ReportCounter: that's the Link game's, and
+     the renderer+0x81c0 counters its controller does read don't come from there); and present pacing: building the grid
+     with the panel's REAL period measured from the presents was tried, and the "control" itself ruled it out — the
+     actual presents (actualPresentTime) don't measure the panel's clock but the compositor's close-out (14.8 ms on
+     average at 60 fps on the Thor, jumpy); with that grid the pacer disqualifies itself ("not whole refreshes") and the
+     game runs WITHOUT present pacing... and the hitches stay the same (4 in ~90 s, same as with it). The game's vsync
+     clock measured a median of 16.6422 ms (0.147% fast) because its anchor is those same presents: it's the compositor
+     that's out of step with the panel, not the other way around. Reverted, no code committed.
+  3. Next lead (so as not to start over): the controller decides on something the runtime doesn't instrument yet. Still
+     to be looked at: the count of vsync events the game consumes (the signal from vi.c's thread may coalesce if the
+     game re-arms its event late: it would read a skipped tick) and its internal counters at renderer+0x81c0 (who fills
+     them, with what clock — fnprof with the window on a hitch). Not the GC, not the caches, not the log, not
+     presentation: no need to look there anymore.
+
+0.8.3-alfa (2026-11-19) — transferring what the PC has seen, now a script in the repo; and a correction to 0.8.2
+  1. tools/android/pc_shader_transfer.sh: what 0.8.2 measured now ships with the repo (before, it was only in pruebas/).
+     It carries over to a device the " z=" lines of the player's own list that the PC learned (by running the scene with
+     LARECOMP_VK_DYN_DEPTH=0) and whatever codes are missing, through "run-as": adb can't write to cache/, which belongs
+     to the app. The script's header has the recipe, the measurements (d04b1: 45 -> 11 pipelines compiled on use,
+     1025 -> 373 ms) and its limits (families with a different vertex layout are compiled on use;
+     LARECOMP_VK_DYN_VERTEX=0 makes the game crawl on PC and is no good for harvesting).
+  2. Correction to what 0.8.2 says (its point 3): the ~1 s hitch when entering a new area is NOT the serial translation
+     of the new programs. The translator was made reentrant (the RSC2 string ring and the debug selectors, per thread;
+     the guest heap, at initialization) and the translations moved to run_job's thread pool: measured twice in the same
+     never-seen sewers, the hitch stays the same or gets worse (worst frame 1,638 and 1,000+ ms, minimum 12.8 and
+     9.9 fps; with 0.8.2, 1,025 ms and 22.3 fps) — and the builds took LONGER to drain. Reverted: it improves nothing.
+     What really happens in that second: the game barely presents (27-66 frames in 2 s with 4-9 ms waits: it isn't
+     waiting for anyone) — it's its own scene loading, on its own thread. To track it down there's the slow-frame log
+     with LARECOMP_SLOW_FRAME_MS=50 (with 15 it fills up with normal frames and the cap of 20 lines per minute is used
+     up before the entry) and a virgin area on PC.
+
+0.8.2-alfa (2026-11-19) — new areas: fewer silhouettes and a shorter worst frame (more build threads)
+  1. When entering a never-seen area, the draws whose pipeline is still compiling are skipped (the silhouettes) and
+     there's one long frame; both depend on how many threads compile at the same time. It was "cores - 4" (4 on the
+     8-core Thor); now it's "cores - 2" (6 on the Thor), minimum 4, and LARECOMP_BUILD_THREADS=N sets a fixed number
+     (docs). Measured entering the same never-seen castle three times, with the same load all three times (216 compiles)
+     and the game alive at the end:
+     - 4 threads: 1312 skipped draws and a 456 ms frame;
+     - 6 threads: 987 skipped (-25%) and a worst frame of 366 ms (-20%);
+     - 8 threads: 1395 skipped and present pacing broken for ~10 s (291 frames in a row at 33 ms on screen, even though
+       the game stayed at 60): the game's threads, the draw thread and the translator eat CPU too, and there's none to
+       spare for presenting on time. 6 threads is the sweet spot: it cuts the skipped draws without throwing anyone off
+       pace.
+  2. Bringing over to the Thor what's already been seen on PC (without touching code): the PC runs the scene with
+     LARECOMP_VK_DYN_DEPTH=0 (depth fixed in the pipeline, as on the Adreno; without that its lines come out without
+     " z=" and are no good), and the new lines of its own list and whatever codes are missing are copied to the Thor (by
+     hash: the same shader gives the same file). The Thor prepares them at boot ("prepared … + N seen"). Tested with the
+     sewers (d04b1), which from cold cost 45 pipelines compiled on use, 66 skipped draws and a 1025 ms frame (the serial
+     translation of ~36 programs on a single thread): with the transfer, 11 pipelines, 18 skipped and a worst frame of
+     373 ms. Measured limitation: the PC records the vertex layout separately (dynamic), so the pipelines of a few
+     families don't match and are compiled on use (2 of 47, visible in [prepcheck]); LARECOMP_VK_DYN_VERTEX=0 doesn't
+     fix it: the game on PC crawls with the fixed layout (~200 ms per frame, not even the logos). The script is
+     pruebas/pc_shader_transfer.sh (it pushes with "run-as": adb pushes can't write to cache/, which belongs to the app
+     and gives shell no permission; after each push, chmod 660).
+  3. Measured along the way, so as not to go down that road again: waiting without a cap during fades (idea (b)) gains
+     nothing — when entering a new area, "Balanced"'s wait (10 ms per frame) is barely used (4-9 ms in 2 s intervals);
+     the pause is the serial translation and the texture uploads, and what really removes it is the boot-time
+     preparation (0.8.1) and this transfer. And careful when restoring the player's own list: a direct adb push to
+     cache/shader_seen.txt doesn't work (the file belongs to the app; adb says "pushed" but doesn't write): it has to go
+     through "run-as", as in the script.
+
+0.8.1-alfa (2026-11-19) — fewer black silhouettes: what's already been seen is compiled at boot
+  1. Characters and scenes that showed up black for a moment when entering: those are draws skipped while their pipeline
+     compiles (the first time in each session, even if the driver's cache already had it). The runtime's pipeline
+     preparation (shader_prep.c) never worked in SMRPG: it looks for the shaders in the game's files the Link's
+     Awakening way and finds none in Unity's .bundle files ("index 0 shaders"), and its fixed list is Link's
+     Awakening's. Now:
+     - the game keeps its own copy of the code of every shader it uses (cache/shader_code/<hash>.bin, only on the
+       player's device, like the SPIR-V cache);
+     - on every boot, in the background while the logos and the title play, it prepares everything in the player's own
+       list (cache/shader_seen.txt) with that code; Link's Awakening's list is no longer walked;
+     - on the Adreno depth is fixed in the pipeline (0.7.2): the player's own list now records it (" z=" on each line),
+       and the earlier lines, without it, aren't prepared (they wouldn't give the game's pipeline). The first session
+       with this version learns the new list and the code; from the second one on, what's already been seen is ready in
+       advance.
+  2. What was never seen on this device (a new area or battle) is still compiled on use, as before.
+  3. Correction to what 0.7.4-alfa says: the driver's pipeline cache does NOT start from scratch with each APK. Its tag
+     carries LARECOMP_VERSION (LASRecomp's, fixed), the translator's hash (translate.c and shader.h) and the GPU and its
+     driver: it's only emptied if the translator or the driver changes (on the Thor, the tag from November 18 stayed
+     valid with all of the 19th's APKs: the cache grew from 1.8 to 3.1 MB).
+  Measured. On PC (hidden, the same scene twice, 60 s): pipelines compiled on use 104 -> 0 and skipped draws 2,824 -> 0;
+  the preparation, 0.7 s in the background. On the Thor (test save f01out, 75 s): without preparation, 31 pipelines on
+  use; in the next session, 12 of the 13 that were compiled on use came out prepared (the other one was the same shader
+  pair with a different vertex layout: a different pipeline). In that second session Mario ran into an enemy: 95 new
+  pipelines at once and 499 skipped draws in 2 s, the never-seen case (point 2), now recorded for next time. The 388
+  lines of the previous list (without " z=") aren't prepared (they don't carry the depth).
+  For testing: LARECOMP_SHADER_PREP=0 turns it off, =1 does it before the first frame (as before, for testing);
+  LARECOMP_PREP_CHECK=1 says in the log why a prepared pipeline didn't match the game's.
+
+0.8.0-alfa (2026-11-19) — "Swap A-B" and "Swap X-Y", separately
+  1. 0.7.9's option is now two under Controls > Controller: "Swap A-B" (on an Xbox-lettered controller, "A" confirms and
+     "B" cancels) and "Swap X-Y" (its "X" opens the items and its "Y" the specials). Each one swaps only its own two
+     controller buttons, and "Restore default controls" and the guide in Controls take each into account. They're saved
+     as pad_swap_ab and pad_swap_xy; a 0.7.9 larecomp.ini with pad_swap_abxy = 1 is read as both being on.
+  2. Numbering: a new option bumps the middle number (Semantic Versioning); 0.7.8 and 0.7.9 also brought new options and
+     should have bumped it.
+  Tested on PC with a simulated Xbox-lettered controller: with only "Swap A-B", the bottom button loads the save from
+  the title and the guide says "Talk / confirm · A", "Jump / cancel · B", "Items · Y", "Specials · X"; with only "Swap
+  X-Y", the bottom one doesn't load it and the guide says B, A, X, Y; with a 0.7.9 larecomp.ini, both "Yes".
+  For testing: LARECOMP_SET=<frame>:pad_swap_ab=0|1 and pad_swap_xy=0|1.
+
+0.7.9-alfa (2026-11-19) — "Swap A-B and X-Y" under Controls > Controller
+  1. New option under Controls > Controller: "Swap A-B and X-Y". By default the controller's buttons go by position, as
+     on the Switch (the right one confirms); on an Xbox-lettered controller, like the AYN Thor's, that one is its "B":
+     the game said "A" and you had to press "B". With the option on, its "A" confirms, its "B" cancels, its "X" opens
+     the items and its "Y" the specials, matching its letters and the buttons the game shows. It swaps the controller's
+     bindings, so "Configure controls", the button guide in Controls and larecomp.ini (pad_swap_abxy and its bind_pad_*
+     lines) go along with it; "Restore default controls" respects it.
+  2. "Confirm in menus: As in the game" now confirms with whichever button is A in the game (with the option on, the
+     bottom one); "As on the controller", as before.
+  Tested on PC with a simulated Xbox-lettered controller (LARECOMP_PAD_TYPE=xbox) and controller presses that go through
+  the bindings (LARECOMP_HOST_INPUT): with the option on, four presses of the bottom button on the title load the save;
+  without it, it stays on "Load". The guide in Controls then shows "Talk / confirm · A", "Jump / cancel · B",
+  "Items · X", "Specials · Y". For testing: LARECOMP_SET=<frame>:pad_swap_abxy=0|1.
+
+0.7.8-alfa (2026-11-19) — "Screen refresh rate" in the menu
+  1. New option under Video (Android only), below "FPS limit": "Screen refresh rate". "The game's (smooth)", the
+     default, is 0.7.7's behavior: at 60 fps, the display runs at 60 Hz and every frame lasts the same. "The system's
+     (less latency)" leaves the rate the display had when the game started (120 Hz on the Thor): each frame is seen
+     about 9 ms earlier, with 0.7.6's occasional hitch. It applies at once and is saved in larecomp.ini (match_refresh).
+     With Lossless Scaling frame generation, always the one it needs.
+  2. "The system's" is also requested (the rate the display had at the start, before anything was requested), because
+     withdrawing the request doesn't bring it back: the Thor stayed at 60 Hz.
+  Tested on the Thor: toggling the option mid-game (LARECOMP_SET=<frame>:match_refresh=0|1, new for testing), the
+  display goes from 60 to 120 Hz and back, and the pacing is relearned on every change (at 60 Hz, 100% of the frames at
+  16.7 ms in the measured stretch); the option, seen in the menu with the controller.
+
+0.7.7-alfa (2026-11-19) — At 60 fps, the display at 60 Hz: the remaining hitch is gone
+  1. The hitch that remained at 120 Hz (one every ~4 s in 0.7.6) was Android's compositor, as seen in a system trace
+     (atrace): at 120 Hz it starts composing each frame only 1.85 ms before the refresh it shows it on, and the
+     submission to the top screen's panel (Qualcomm's display service and the kernel) has to get there at least about
+     0.7 ms before the vsync. It gets there with 0.2-0.4 ms to spare; when the validation or the submission takes a bit
+     longer (0.9-1.4 ms instead of 0.25), the kernel leaves the frame for the next refresh. The game can't speed up the
+     compositor, but it can ask the display for its own rate: at 60 fps it now asks for 60 Hz
+     (ANativeWindow_setFrameRate), and at 60 Hz the compositor starts about 15 ms before the refresh: no more race
+     ("On Time Present"). Measured on the Thor (5 minutes of walking, 1080p, SMAA): 99.96% of the frames at 16.7 ms
+     (0.7.6: 99.1%; before 0.7.6: 91.6%); what's left is the game's own hitches (one frame with 28-38 ms of CPU every
+     30-40 s). In exchange, it takes about 10 ms longer from when the game presents a frame until it's seen (35 versus
+     26 ms).
+  2. With Lossless Scaling frame generation it asks for the resulting rate (the pace times the multiplier: 120 Hz with
+     x2; with x3 or x4, Android sets the highest). Withdrawing the request wasn't enough: the Thor stayed at 60 Hz and
+     generation couldn't get its frames out. With "FPS limit" at 120 or 40, 120 Hz; at 30, 60 Hz. Android goes back to
+     its own rate when leaving the game, and the system setting isn't touched. Tested on the Thor: turning Lossless
+     Scaling on and off (120 Hz with it, with the usual performance; 60 Hz without it), and going to the background and
+     back. LARECOMP_VK_MATCH_REFRESH=0: as in 0.7.6 (docs/debug-hooks.md).
+  3. The starting lead now depends on the refresh (the GPU, ~12 ms, and 1.25 compositor refreshes: 22.4 ms at 120 Hz,
+     32.8 at 60) and is relearned, along with what's normal for the display, when the rate changes.
+  4. Build: libnativewindow is linked (ANativeWindow_setFrameRate isn't in libandroid).
+
+0.7.6-alfa (2026-11-19) — Evenly paced 60 fps on the 120 Hz display
+  1. No more hitches at 60 fps on a 120 Hz display (about 2 per second on the Thor: one frame was shown for 8 ms and the
+     next for 25). Each frame should be shown for 2 refreshes, but it came out on the first refresh after finishing on
+     the GPU, and the game keeps its 60 with a clock of its own that isn't in step with the display: of the frames that
+     finished close to a refresh, some came out on the previous one and some on the next. Now:
+     - each present asks the display for its refresh (VK_GOOGLE_display_timing, which Android offers on every device) at
+       a fixed step: 2 refreshes per frame at 60 fps on 120 Hz, 3 at 40 fps, 4 at 30 (with a limit that doesn't give
+       whole refreshes, like 90 on 120 Hz, nothing changes). The frame arrives 22 ms ahead (what the GPU and the
+       compositor take) and the display holds it until its refresh; if that isn't enough (3 late frames in one second,
+       as when returning from the background, with the GPU still ramping up), the lead goes up by itself, up to 2
+       frames;
+     - the game's vsync lands on a display refresh: without this, the game's clock and the display's drift apart little
+       by little and the step was redone (a hitch) every few seconds.
+     Measured on the Thor, 5 minutes of walking outside Mario's house with the usual settings (1080p, SMAA), about
+     13,500 frames per test: 99.1% at 16.7 ms (91.6% before): 58 at 8 ms and 58 at 25 ms, versus 567 and 562 before.
+     With only the requested time, without the vsync on the refreshes, 96.5%. The game, at 60.0 fps as before.
+  2. What's left (a hitch every ~4 s; more when the compositor is loaded) is Android's compositor: it starts composing
+     each frame 10.3 ms before its refresh, and the Thor's display shows it one refresh early if it finishes within
+     2 ms. It almost always finishes in 1.8-2.1 ms; when it goes over, that frame comes out one refresh later than the
+     rest (with the GPU finished well ahead: it isn't the game). For every frame it also composes, on the GPU, the
+     bottom screen (its launcher). Seen in its frame log (dumpsys SurfaceFlinger --frametimeline: "Early Present").
+  3. Also tested on the Thor: with Lossless Scaling frame generation the pacing steps aside (FIFO: each frame already
+     goes to one refresh) and comes back when it's turned off; when going to the background and back, it starts over by
+     itself; with "FPS limit" at 40 and 30, 25 and 33 ms frames. Nothing changes on PC (outside Android it's off by
+     default; tested hidden: 60 fps).
+  4. For testing (docs/debug-hooks.md): LARECOMP_VK_DISPLAY_TIMING=0 (as before), LARECOMP_VK_PACING_VSYNC=0 (the vsync
+     on its own clock) and LARECOMP_VK_PACING_LOG=<n> (each frame's requested and actual refresh, raw).
+
+0.7.5-alfa (2026-11-19) — Tests on the AYN Thor: GSR 2, sound, back-to-back launches and a 10-minute session
+  1. The spikes when entering a scene (from 0.7.4): with the Thor's screen recorded, both stalls (250 and 400 ms) fall
+     while the screen is black in the transition fade; with the scene already in view, the longest gap is 67 ms. On PC
+     they're the same (460-490 ms): it's the scene loading (the game waits for its loading threads) plus 46 translated
+     shaders (75 ms). New for tests: LARECOMP_SLOW_FRAME_LOADS=1 also logs slow frames during loads (before, they were
+     only counted).
+  2. Snapdragon GSR 2, tested for the first time on the Thor (outside Mario's house, walking): native 57.6 fps (GPU at
+     95%); quality (720p -> 1080p) 60 fps with the GPU at 75% at 615 MHz; performance (540p) 60 fps at 59%; SMAA at
+     1080p, 60 fps at 87% at 680 MHz. Quality looks almost the same as SMAA at 1080p; performance, softer. With LSFG x2
+     (50% flow): 59 real fps and 123 on screen, and battles at 60 with generation on (GPU at 97%).
+  3. 8 launches in a row up to the save: all fine (0.7.2's one-off hang while loading doesn't recur).
+  4. Sound: low-latency AAudio, no errors.
+  5. 10 minutes of walking with the usual settings (1080p, SMAA): 60.0 real fps every minute, the process's memory from
+     2,968 to 2,976 MB, no errors. Seen: on the 120 Hz display, of 32,367 frames, 1,081 are shown for 25 ms and 1,080
+     for only 8 ms (about 2 hitches per second): the game keeps its 60 with a clock of its own, out of sync with the
+     refreshes. The Thor offers VK_GOOGLE_display_timing, which allows requesting each frame's time: pending.
+
+0.7.4-alfa (2026-11-18) — The pipeline cache is saved when leaving the game: fewer black silhouettes next session
+  1. The pipeline cache is also saved when the app goes to the background. Until now it was saved every 3 minutes and
+     when quitting the game, but on Android there's no clean exit (the app is closed from recents, or the system kills
+     it in the background), so the last few minutes' worth was lost. With the previous session's cache, entering
+     Mushroom Way skips 521 draws instead of 7,313 (the black silhouettes while their pipelines are created: 93% fewer).
+     Measured on the Thor with two sessions in a row, going through Home in between (1.45 MB of cache).
+  2. Correction to 0.7.2-alfa: the 300-450 ms jumps don't come from walking through Mushroom Way. One is the entry into
+     the scene (hundreds of MB of textures and about 60 new pipelines at the same time), and the other, a few seconds
+     later, another 70 pipelines at once. They remain with the cache (not investigated yet).
+  Each new APK starts its cache from scratch (the tag carries the build): the first session after installing a version
+  is the one that fills it, and there the silhouettes remain.
+
+0.7.3-alfa (2026-11-18) — No more 1 s stall when turning on Lossless Scaling frame generation
+  1. Turning on Lossless Scaling frame generation no longer freezes the game for a second. Its pipelines (about 20,
+     compute) were created without a cache when creating its context, and on the Adreno that took 0.75-1.2 s in every
+     session. Now the library (tools/lsfg/lsfg_smrpg.cpp) gives them a pipeline cache saved to disk
+     (cache/lsfg_pipelines.bin in the data folder: 362 KB on the Thor), which is only used if it's from that GPU and
+     that driver. On the Thor: 1,002 ms the first time and 12 ms the following ones, generating just the same (0
+     failures). On PC (AMD) nothing changes: about 90 ms (its driver already kept its own).
+  2. The log now gets right what each thing costs: at init, translating its shaders (26-34 ms on the Thor); when
+     creating its context, its pipelines.
+  The library's API moves to version 2 (cache_path): this version's game and library go together (in the APK; on PC,
+  build/lsfg.dll).
+
+0.7.2-alfa (2026-11-18) — Hedges without black patches and trees without flicker on the Adreno: it was the driver
+  1. The hedges no longer have black patches. It was the AYN Thor's Qualcomm driver (676): whatever has a depth prepass
+     (the hedges, the trees) is then drawn comparing EQUAL against that depth, and with the depth test, write and
+     compare as dynamic state (vkCmdSetDepthTestEnable…), the Adreno failed that comparison in blocks of 8 to 24 pixels,
+     different in every frame, even though both passes compute the same position with the same operations and the same
+     matrices (verified). At 720p internal those gaps let the black clear show through (2-30% of the hedges); at 1080p,
+     the previous frame (9.8% when forcing the clear). Now, on Qualcomm GPUs, depth is fixed in each pipeline: 0.00% at
+     720p and at 1080p.
+  2. The treetops no longer flicker, and with the real EQUAL comparison, the game's own on the Switch. Since 0.4.0-alfa
+     it was papered over by turning EQUAL into "nearer or equal", which filled some of the gaps but not all. With 5 s
+     recorded outside Mario's house at 1080p: 0.00% of the image flips back and forth (with dynamic depth and EQUAL,
+     1.71%).
+  3. Depth bias is applied on the Thor. With its enable as dynamic state, the driver never applied it, in any draw (not
+     even with ±1,000,000): not in the game's shadows either. Now it's on in every pipeline, and its values are still
+     dynamic (0 in the draws that don't ask for it). yuzu and Eden turn off Vulkan's extended dynamic states on Qualcomm
+     because of bugs like these.
+  4. The GPU does less work. In Mushroom Way at 1080p (60 FPS limit), with the console cold in both measurements: the
+     GPU at 58% (66% before), 59.4 frames per second on screen (58.2 before) and half as many 25 ms frames (92 versus
+     195). With Lossless Scaling x2 (720p with GSR 1, flow at 50%) in the same area, with its battle: a median of 60
+     real fps and 120 on screen, 99% of the frames at 8 ms, the GPU at 70% (before: 52 real, 109 on screen, 87% at 8 ms
+     and the GPU at 90%).
+  5. The log no longer copies every IPC message from the game: that was about 60,000 lines per minute, 99% of the log
+     (12 MB per minute on the Thor), written from the game's threads. Now, 40 KB per minute; with LARECOMP_LOG_IPC=1, as
+     before (and each message on a single line).
+  For testing: LARECOMP_VK_DYN_DEPTH=1 and LARECOMP_VK_DYN_DBE=1 go back to the old way (with dynamic depth on Qualcomm,
+  0.4.0's workaround comes back too: LARECOMP_VK_EQUAL_TOL). New diagnostic tools: LARECOMP_VK_FRESH_RGB=<r>,<g>,<b>
+  (the color each frame is cleared to: whatever nobody draws comes out in that color), LARECOMP_SKIP_FSADDR=<addr> (skip
+  that shader's draws), LARECOMP_VK_LOG_FS=<addr> (the depth state of its draws) and LARECOMP_DEBUG_DEPTH=1|2 (the depth
+  of each pass of the debug frame; 2, without waiting for the GPU). On PC (AMD) nothing changes: everything stays
+  dynamic; also tested hidden with fixed depth (the same images except for the animation).
+  Seen but not fixed: once, in about 70 tests, the game stopped presenting after 10 s on the load screen (its threads
+  waiting; the draw thread, free); it didn't happen again. And the 300-400 ms jumps when walking through Mushroom Way,
+  the same with 0.7.1 (not investigated yet).
+
+0.7.1-alfa (2026-11-18) — Lossless Scaling tested on the AYN Thor: 60 real fps with x2, battles at their proper speed
+  1. Smoother on Android. On the Thor (Adreno 740, 120 Hz display) with x2 the game was stuck at ~53 real fps with the
+     GPU at 75%: the queue thread spent 15 ms per frame inside vkQueuePresentKHR. On Android the Vulkan loader connects
+     the window as EGL, and for EGL its queueBuffer waits for the fence of the image queued just before
+     (BufferQueueProducer, "Throttling EGL Production"): the real frame, presented behind its generated one, waited for
+     the GPU to finish the frame and the generation, and meanwhile nobody submitted the next one. Now the real frame is
+     presented at the start of the next frame, before submitting LSFG's work (the fence the driver gives a present
+     follows queue order), and the swapchain carries one more image; it's seen on the same refresh as before, behind its
+     generated one. On the Thor at 720p with GSR 1, x2 and flow at 50%: 60 real fps (53 before) and 99% of the frames at
+     8 ms (89 before).
+  2. Battles at their proper speed. Their logic advances one step per frame and needs 60 real fps, and in FIFO each
+     image takes up one refresh: with x3 / x4 at 120 Hz (or x2 at 60 Hz) only 40 / 30 fit, and the battle ran in slow
+     motion. They don't get there either if the GPU can't keep up with generation (the Thor at 1080p with x2: 47). Now,
+     for the duration of a battle that wouldn't reach 60 (because of the display, or as measured: two seconds in a row
+     below 56), it shows only the real frames, and when the battle ends it generates again. Tested on the Thor: with x4,
+     30 real fps outside and 60 in the battle; with x2 at 1080p, the same.
+  3. With x3 / x4 the game crashed on the Thor (inside vkCmdBlitImage): Android creates one more image than requested
+     (with 8 requested, 9) and the swapchain tables held 8. Now they hold 16, and if the images didn't fit it says so
+     instead of carrying on.
+  4. The log says how long it takes to come up (on the Thor: 30-90 ms to initialize and 0.75-1.1 s to create its
+     context, which is its pipelines: the stall when turning it on), the display's refresh rate, the swapchain images
+     (requested and given), and every 600 real frames the time spent inside vkQueuePresentKHR.
+  5. Measured on the AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13, 120 Hz), in performance mode, per real frame:
+     x2 6.2-6.7 ms with flow at 75% and 3.9-4.3 at 50%; x3 8.9-9.2; x4 11.0-11.7. Without LSFG the game already takes
+     the GPU to 95% at native 1080p (55 fps, at 680 MHz, its maximum): generating needs headroom.
+       - 720p (GSR 1) + x2 + 50% flow: 60 real fps and 120 on screen outside Mario's house; in Mushroom Way, which is
+         heavier, 52 (the GPU at 97%).
+       - 720p + x3: a constant 40 real fps, every frame at 8 ms; x4: 30 real fps, the same (GPU at 77%, at 615 MHz).
+       - 1080p + x4: 30 real fps, 98% at 8 ms (GPU at 82%). 1080p + x2: 40 real fps (the GPU can't keep up).
+     Sending the app to the background and back with LSFG active: it keeps generating, without recreating its context
+     (no stall).
+     On PC (RX 9070 XT), x2 and x3 still run without failures (0.2 ms per real frame inside vkQueuePresentKHR).
+  Seen but not fixed (not LSFG's): at 720p internal the hedges come out with black patches on the Thor (not at 1080p);
+  the CopyDepth does go through the image copy (copydepth_xfer). Next up.
+
+0.7.0-alfa (2026-11-18) — Lossless Scaling frame generation inside the game
+  1. Menu > Video > "Lossless Scaling frame generation": x2, x3 or x4, with "Flow scale (LSFG)" and "Performance mode
+     (LSFG)" (the default on Android). It's Lossless Scaling's frame generation (LSFG 3.1) done inside the game, without
+     capturing the screen: lsfg-vk (GameNative's Android branch, MIT) in single-device mode, in a separate library
+     (liblsfg.so, tools/lsfg) that works on the game's own Vulkan. Each real frame is copied to its input; on the queue
+     thread LSFG generates the intermediate ones, which are presented before the real one. The swapchain runs in FIFO
+     with more images: each image is shown for one refresh, and the game runs at the display's refresh rate divided by
+     the multiplier (with 120 Hz and x2, 60 real fps, what battles ask for). A bit more latency.
+  2. It needs your own Lossless Scaling (paid, Steam): copy its Lossless.dll to the game's data folder
+     (Android/data/org.smrpgrecomp.android/files). Its shaders are taken from there and translated at startup; they
+     never ship with the port. On PC (this branch's PC version) it's looked for automatically in the Steam libraries.
+  3. What it costs, in the menu's impact panel and every 600 real frames in the log: its GPU time measured with
+     timestamps around its work, and the video memory it takes according to the driver (VK_EXT_memory_budget; without
+     it, estimated). On an RX 9070 XT at 1080p, per real frame: x2 1.4 ms; performance mode 0.77; x3 2.2; x4 3.1; flow
+     at 50% 1.2. Memory at 1080p: its own, 43 MB (27 in performance mode, 20 with flow at 50%; the same with x2, x3 or
+     x4), plus its images (16.6 MB each: the 2 inputs and one for each intermediate frame).
+  4. Tested on PC (hidden): x2, x3 and x4, with no skips or failures (600 real -> 599 generated; with x3, 1,198), the
+     generated frame halfway between the previous one and the real one, and with x3 the first closer to the previous one
+     and the second to the real one. In the Android emulator (lavapipe): active, 7,800 real and 7,799 generated with no
+     skips or failures; in the opening movie (with motion) the generated frame lands halfway and follows the motion, it
+     isn't a blend of the two (LARECOMP_LSFG_DUMP dumps). Its timestamps work there too (36 ms per real frame: lavapipe
+     draws on the CPU, it says nothing about the Thor).
+  5. It doesn't work with HDR or at the same time as AMD's frame generation; with the menu open, only the real frames.
+     When turned off (or with HDR or AMD's) it releases its memory and the menu says why it isn't running.
+  Review before publishing (3 reviewers, 14 findings, 13 fixed and tested):
+     - if its context couldn't be created, the frame was submitted with barriers on its already destroyed images;
+     - a Lossless.dll that was damaged or from another version brought the game down on every boot (the DXVK
+       translator's error isn't a std::exception): now its shaders are translated at init and you get "could not start:
+       the shader … of Lossless.dll could not be translated" (tested with a broken copy: the game carries on);
+     - a failure in its generation put the intermediate frames out of order for good (its count doesn't advance) or left
+       it waiting 2 s per frame: now the context is recreated (at the fourth one in a row, it turns off with those
+       settings); tested with LARECOMP_LSFG_FAIL_AT: with x3, the intermediate frames stay in order afterwards;
+     - whatever the library submits to the queue when initializing, creating, deleting and shutting down goes under the
+       queue's lock;
+     - after a while without frames (minimized window, lost surface) it doesn't interpolate with a real frame from
+       before;
+     - the impact panel no longer shows what was measured with other settings after changing them with the menu open;
+     - building: the PC installer's DLL copy and tools/android/deps.sh's FFmpeg with spaces in the path (the latter,
+       with NDK wrappers: its libwinpthread-1.dll in the PATH breaks the host gcc), ADEPS relative by default,
+       tools/lsfg/build.sh rebuilds from scratch if its sources change, and the APK doesn't carry liblsfg.so without its
+       licenses.
+     Pending for when it moves to PC: the PC installer has neither lsfg.dll nor its licenses.
+  6. Building: from a folder with spaces in the path, `make CURDIR=.` with relative dependencies (ADEPS=../deps/<abi>);
+     the Makefile uses the real folder (ABSDIR, quoted) for the path mapping and the installer's checks.
+     tools/lsfg/build.sh builds the library (Windows and both Android ABIs).
+  Pending: testing it on the Thor (that it has 120 Hz; performance on the Adreno).
+
+0.6.0-alfa (2026-11-18) — Snapdragon GSR 2: Qualcomm's temporal anti-aliasing and upscaling
+  1. "Anti-aliasing" has a new option: Snapdragon GSR 2 (Snapdragon Game Super Resolution 2, by Qualcomm, 3-clause BSD),
+     its 2-pass variant with fragment shaders, the one Qualcomm recommends for mobile. It combines several frames using
+     the game's own motion vectors (the same ones AMD FSR uses on PC): stable edges and fine detail. With "GSR 2
+     quality" (Quality x1.5, Balanced x1.7, Performance x2, Ultra performance x3) the scene is drawn with fewer pixels
+     and GSR 2 upscales it; the UI always stays at full resolution.
+  2. Adapted to the port: rendering into the corner of larger images (like FSR's dynamic resolution), URP's reversed
+     depth and its motion vectors, the port's subpixel jitter (Halton 2,3 with FSR's phases), and the history in its own
+     scene-sized RGBA16F images. From the original, the central 2x2 of depth is taken in Vulkan's textureGather order
+     (the original read other rows). From its compute variants: the color is compressed to [0, 1) before blending (the
+     scene is HDR; the fragment one is for LDR) and the filter's width is limited to 1.99 (at x3 the weights could add
+     up to 0: NaN). With reset, only the current frame.
+     Without memory for its images, the whole frame carries on at the low scale and GSR 2 is retried after a while.
+     Reviewed by 3 reviewers and a verifier before publishing: those fixes and the menu's came out of that. At x1.5,
+     after them, a still image shimmers half as much (0.76 -> 0.38) and looks closer to native.
+  3. Tested on PC (the Thor couldn't be used): it looks similar to AMD FSR 3.1, with no trails on moving things; the
+     sign of the subpixel jitter, measured (flipping either axis makes a still image shimmer more and lose sharpness);
+     0.15 ms of GPU at 1080p on an RX 9070 XT. On the Adreno, estimated from Qualcomm's figure: about 0.65 ms at 1080p.
+     On Android, tested in the emulator (x86_64, software Vulkan): GSR 2 turns on at native and at x1.5
+     (853x480 -> 1280x720) without errors. Also on PC, as the fourth anti-aliasing option. In larecomp.ini, "antialias =
+     gsr2"; for tests, LARECOMP_SET antialias=3 (with fsr_mode), LARECOMP_GSR2_MV and LARECOMP_GSR2_JIT (signs).
+  4. Menu: the quality's impact says how many pixels are really drawn, and no longer adds AMD FSR's memory if FSR isn't
+     the chosen anti-aliasing (nor the "measured on this PC" on Android); GSR 2's impact estimates its cost on the
+     Adreno from Qualcomm's table according to the quality (about 1.2 ms at native 1080p, 0.7 at x2). When switching
+     between AMD FSR and GSR 2, the history starts over.
+  5. The fade to black in transitions (when entering an area or a house) covers the whole screen when it's wider than
+     16:9, like many phones' (20:9): the same as PC's 0.48.1-beta. On the Thor (16:9), no change.
+  Pending: testing it on the Thor (performance and looks on the Adreno).
+
+0.5.0-alfa (2026-11-18) — Snapdragon GSR 1 as an upscaler, and the licenses inside the APK
+  1. "Upscaling" has a third option: Snapdragon GSR 1 (Snapdragon Game Super Resolution 1, by Qualcomm, open source
+     under the 3-clause BSD license). It upscales and sharpens in a single 12-sample pass, made for Adreno GPUs. It
+     kicks in when the internal resolution is below the display's. Tested on the AYN Thor at 720p internal upscaled to
+     1080p: 60 FPS with bilinear, AMD FSR 1 and GSR 1; GSR 1 looks sharper than bilinear and similar to FSR 1. In
+     larecomp.ini, "upscaler = gsr1"; for tests, LARECOMP_SET upscaler=0|2|3.
+  2. The APK carries the licenses of what it contains (assets/licenses, with a summary in LICENSES.txt): the port, Dear
+     ImGui, SMAA, Snapdragon GSR, the fonts, SDL3, Opus, shaderc, glslang, SPIRV-Tools, FFmpeg (LGPL 2.1) and the NDK's
+     libc++. The PC installer's license list also names Snapdragon GSR's.
+  Pending: on the Thor, at 720p internal, black holes that move around every frame in the hedge behind the sign at
+  Mario's house. They show up with all three upscalers: they come from the foliage drawing, not from the upscaling.
+
+0.4.0-alfa (2026-11-17) — on the Thor: trees without flicker, and the game stops in the background
+  1. Trees and foliage that flickered on the Adreno: leaves missing in chunks, or the whole tree bare, on alternate
+     frames. URP's depth prepass loses fragments of the alpha-clipped leaf cards on the Adreno 740 (driver 676), and the
+     color pass, which draws with EQUAL depth, left those gaps. Verified that it isn't the texture, the sampler, the
+     constants, the position (without discards the two passes match), early Z or the vertex shaders' FMAs. On Qualcomm
+     GPUs, EQUAL becomes "nearer or equal" without bias, in the direction of the depth (according to its last clear): it
+     fills the prepass's gaps and nothing more (without the bias that on PC let the walls draw over the plants right up
+     against them). Measured outside Mario's house: the treetops as on PC in every screenshot, and the flicker from
+     12.2% of the pixels to 5.3% (what's left is the wind). LARECOMP_VK_EQUAL_TOL=0 turns it off.
+  2. In the background (Home, another app) the game stops, as on the Switch, and resumes when you come back: the game's
+     threads stop at their next safe point, with the kernel's cooperative pause (the IL2CPP collector's, without
+     touching its own pauses). LARECOMP_NO_BG_PAUSE=1: it keeps running. SDL's notifications are handled with an event
+     watch: with SDL's block-on-pause, the event loop wouldn't see them until coming back.
+  3. For tests: LARECOMP_VK_EQUAL_TOL 1-4, LARECOMP_VK_VS_NOFMA, LARECOMP_VK_DISCARD_FRAGDEPTH; LARECOMP_LOG_TEXFMT also
+     logs when a shader gets the empty view.
+  Pending: the exact cause of what the prepass loses (it's in the driver).
+
+0.3.0-alfa (2026-11-17) — the AYN Thor: lava room right and at 60 FPS, menu on the Back button, return from background
+  1. Tested on the AYN Thor (Snapdragon 8 Gen 2, Adreno 740 with driver 676, Android 13): at 60 FPS at 1080p in Bowser's
+     Keep, with its controller ("Odin Controller") and sound.
+  2. The lava room in Bowser's Keep (d01f1c), on the Adreno:
+     - The lava came out flat, in cracked slabs, and its bubbles green: with dynamic vertex input
+       (VK_EXT_vertex_input_dynamic_state) Qualcomm's driver misreads the attributes of some meshes. On Qualcomm GPUs
+       the vertex format goes in each pipeline (LARECOMP_VK_DYN_VERTEX=1 makes it dynamic again).
+     - A red and black checker pattern (32x16 px blocks) flickered in half of the frames: URP's CopyDepth (two triangles
+       that copy the scene's depth with gl_FragDepth to _CameraDepthTexture) left blocks unwritten on the Adreno, and
+       the particles that read it (the glow over the lava) came out checkered. It wasn't the synchronization, the format
+       (D24S8 / D32S8) or the GENERAL layout. Now that copy is an image copy (vkCmdCopyImage): the same result with less
+       work; 0 frames with the pattern out of 53 (~50% before). On by default on Android and on Qualcomm GPUs
+       (LARECOMP_VK_COPYDEPTH_XFER=0 / 1).
+     - 15 FPS: one of the room's shaders (fs def772159b2635d0) declared 1 KB of local memory per pixel and zeroed it for
+       each one: 57 ms per frame on the Adreno (the GPU's private memory). The translator now gives each shader the
+       local memory its header asks for (SPH: low + high + CRS stack / 32, like Ryujinx; this one asks for 16 bytes or
+       less: 4 words), and grows it if some LDL / STL with a fixed offset goes beyond it. From 69 to 14 ms of GPU per
+       frame: 60 FPS (LARECOMP_LMEM_FULL=1: the previous 256 words). It applies to PC too.
+  3. More Adreno differences, so that the translated shaders give the same results as on PC:
+     - No 64-bit integers in shaders (shaderInt64): the address math, with 32-bit words (LARECOMP_VK_NO_INT64=1 forces
+       it on another GPU).
+     - SHFL with its bound and segment mask operand (PTX's shfl): the game spreads one value across each quad for its
+       derivatives (SHFL + FSWZADD), and before, thread 0 of the whole subgroup was read (on PC, some textures a bit
+       blurry).
+     - MUFU.SIN / COS with the angle reduced to [-pi, pi] (on the Switch RRO does it; the Adreno can't handle large
+       angles: the lava came out black).
+     - D24S8 depth (the Switch's) also when D32S8 doesn't support blits. Textures in a format the GPU doesn't filter
+       linearly (32-bit floating point, D16), unfiltered; except with comparison (shadows: linear PCF).
+     - Every new color target, zeroed (the game counts on clean memory).
+     - Coherent memory for each frame's data ring, the readback and the empty buffer (the Adreno also offers cached
+       memory that isn't coherent, and nothing flushed it).
+  4. Returning from the background: after leaving with Home and coming back, the game stayed black. The Vulkan surface
+     dies with Android's native window (VK_ERROR_SURFACE_LOST_KHR on every frame); now the swapchain and the surface are
+     recreated when returning to the foreground.
+  5. The settings menu on Android:
+     - The Back button (the Thor's, or the one on Android's bar) opens and closes it, like Esc on PC (before, it was the
+       controller's Select, and the one on the bar closed the app). Also Guide, or Select + Start at the same time.
+     - No system on-screen keyboard when opening it (only with a text field being edited).
+     - 1.25 times larger and full width (LARECOMP_UI_SCALE=<factor> changes it).
+     - Without what's PC only: display mode and resolution, AMD FSR as anti-aliasing and its frame generation (Windows
+       libraries), HDR. "Quit game"; automatic language = the system's; the version, Android's.
+  6. For tests: LARECOMP_LOG_TEXFMT (which textures each shader reads), LARECOMP_LOG_INPUT (what each button sends),
+     LARECOMP_LOG_LMEM, the GPU's memory types in the log and LARECOMP_DBG_FS by the shader's hash.
+  Pending: the game keeps running in the background (the Switch freezes it); the menu's performance meter on Android;
+  bringing what's useful over to PC (local memory, SHFL, MUFU, zeroed targets).
+
+0.2.0-alfa (2026-11-17) — the APK also carries arm64 (the AYN Thor): the game, moved in memory
+  1. On Android arm64 a process's address space is 39 bits (512 GB) and the game's usual window,
+     0x70_0000_0000-0x80_0000_0000, is where Android puts its libraries and its memory: there the game goes
+     0x60_0000_0000 lower, at 0x10_0000_0000 (runtime/guest_addr.h: GUEST_SHIFT and GADDR). The game's code is generated
+     for the moved bases (tools/gen.py <base>) and its functions keep their usual names (gen.py --name-shift), so the
+     fixes and the program still find them; the hand-written addresses (rt.h, kernel.h, the GA table, the 38 in
+     tools/game_overrides.c and a dozen in the program) go through GADDR. On PC and on x86_64 nothing changes
+     (GUEST_SHIFT 0).
+  2. The game's code for arm64 (generated-aarch64, with ARM's vector instructions: gen.py --simd asm): a 203 MB
+     lasgame.so, 154,122 + 39,483 functions.
+  3. A single APK with both architectures, arm64-v8a and x86_64 (tools/android/apk.sh, whichever are built).
+  4. Tested in the emulator running the ARM version (the emulator translates the ARM code to x86): the game loaded at
+     0x1000000000, title, loading a save and playing in Bowser's Keep, with the picture the same as on PC.
+  5. runtime/platform/android.c: if the game's code doesn't come with a .cpu (the arm64 one doesn't have it), the one in
+     the internal folder is deleted (an old x86_64 one would have rejected it).
+  Pending: the test on the AYN Thor (a real ARM CPU, Adreno GPU, 39 bits, its controls).
+
+0.1.0-alfa (2026-11-17) — first working APK: the game boots and is playable in the emulator (x86_64)
+  1. `make PLATFORM=android ABI=x86_64|arm64-v8a`: the program as libmain.so (loaded by SDL3's SDLActivity) and the
+     game's code as lasgame.so, with NDK 29; the dependencies (SDL3 3.4.20, FFmpeg 9.0.2 LGPL, Opus 1.6.1, shaderc
+     2026.4) with tools/android/deps.sh; the APK with tools/android/apk.sh (no Gradle).
+  2. runtime/platform/android.c: the Linux platform plus what an app needs (external data folder, resources from the
+     assets, the game's code copied to the internal folder so it can be loaded, env.txt for tests).
+  3. x86_64 (the emulator) uses the same generated C as PC; arm64 pending: the game lives at 0x7000000000-0x8000000000,
+     which on phones (39-bit addresses) belongs to Android.
+  4. Tested in an Android emulator (Android 17, x86_64, software GPU): logos, opening movie, title, menu, loading a save
+     and playing in Bowser's Keep, with controller/keyboard and sound, fullscreen and in landscape (~38 fps in the
+     movies, ~9 fps in game: the GPU is the CPU).
+  5. Fixes for Android:
+     - the picture came out rotated 90° on devices whose panel is natively portrait: the swapchain goes unrotated and
+       the compositor rotates it (and each present's SUBOPTIMAL result no longer recreates the swapchain);
+     - always fullscreen (the "windowed" mode from the PC settings took it away);
+     - shaderc 2026.4 instead of the NDK's, which didn't know GL_EXT_texture_shadow_lod: no shader compiled;
+     - Vulkan's optional features (int8/int16 in buffers, etc.) are only requested if the GPU has them;
+     - Link's Awakening's 30 fps pacing (pace.c) read an address that is nothing in SMRPG: a fault when running slow;
+     - ASTC decoded on the CPU in the emulator (its ASTC "emulation" gave black textures); LARECOMP_VK_ASTC_CPU;
+     - a virtual or software GPU gets 300 s, not 10, for a submission.
+  6. Fixes that also apply to PC (still to be brought over there):
+     - the game's file table counted _filelist.json (left there by the extraction, not the game's) and the expected
+       total size was a different number: with a good copy, the log said "damaged or changed game files" and any failure
+       was explained as damaged files; the file count was Link's Awakening's (3836);
+     - the "BRA to the previous control slot" padding at the end of some shaders counted as a real jump and wrapped them
+       in the switch loop of the ones that do jump (slower to compile and to run).
+  Pending: the APK for the AYN Thor (arm64): moving the game's address space, which on Android arm64 (39 bits) clashes
+  with the system's, and generating the game's code for AArch64.

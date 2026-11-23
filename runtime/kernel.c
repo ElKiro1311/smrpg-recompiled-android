@@ -120,38 +120,38 @@ static uint64_t heap_size;
 static uint64_t tls_next = TLS_BASE;
 uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE set by SetHeapSize
 
-// SMRPG: datos del proceso para GetInfo (main.c los lee del main.npdm en cada arranque) y la memoria física que el
-// juego tiene mapeada con MapPhysicalMemory, que en la Switch cuenta como memoria usada.
-static uint64_t proc_program_id = 0x01006BB00C6F0000ull;  // (sin NPDM: el valor que traía LASRecomp)
+// SMRPG: process data for GetInfo (main.c reads it from main.npdm on every boot) and the physical memory the game has
+// mapped with MapPhysicalMemory, which on the Switch counts as used memory.
+static uint64_t proc_program_id = 0x01006BB00C6F0000ull;  // (without an NPDM: the value LASRecomp came with)
 static uint64_t proc_system_resource;
 static uint64_t phys_mapped;  // (con __atomic)
-static uint64_t exc_ctx_page;  // la página de GetInfo 20 (UserExceptionContextAddress), una por arranque
+static uint64_t exc_ctx_page;  // the GetInfo 20 page (UserExceptionContextAddress), one per boot
 _Atomic uint32_t g_terminate_result;
 void kernel_set_process_info(uint64_t program_id, uint64_t system_resource_size) {
     if (program_id) proc_program_id = program_id;
     proc_system_resource = system_resource_size;
-    LOG("[kernel] programa %016llx, system resource 0x%llx (memoria virtual de nn::os %s)\n",
+    LOG("[kernel] program %016llx, system resource 0x%llx (nn::os virtual memory %s)\n",
         (unsigned long long)proc_program_id, (unsigned long long)proc_system_resource,
-        proc_system_resource ? "activada" : "desactivada");
+        proc_system_resource ? "on" : "off");
 }
 
-// SMRPG: las páginas de la región alias mapeadas con MapPhysicalMemory, un bit por página de 4 KB (1,5 MB para 48 GB).
-// Como en la Switch, MapPhysicalMemory solo mapea, y pone a cero, las páginas del rango que no lo estaban: el
-// VammManager vuelve a mapear rangos que ya tienen páginas con datos (TlsHeapCentral::Init escribe su objeto en la
-// primera página y después mapea un rango que la incluye; borrarla entera le dejaba punteros nulos).
+// SMRPG: the pages of the alias region mapped with MapPhysicalMemory, one bit per 4 KB page (1.5 MB for 48 GB). As on
+// the Switch, MapPhysicalMemory only maps, and zeroes, the pages of the range that were not mapped yet: VammManager
+// remaps ranges that already have pages with data (TlsHeapCentral::Init writes its object into the first page and then
+// maps a range that includes it; clearing that whole page left it with null pointers).
 static uint64_t *phys_bits;
 static pthread_mutex_t phys_lock = PTHREAD_MUTEX_INITIALIZER;
 #define PHYS_PAGES (ALIAS_SIZE >> 12)
 static bool phys_test(uint64_t pg) { return phys_bits[pg >> 6] >> (pg & 63) & 1; }
 
-// Mapea (map) o desmapea [a, a+n), ya validado dentro de la región alias. Devuelve los bytes que cambiaron de estado.
+// Maps (map) or unmaps [a, a+n), already validated to be inside the alias region. Returns the bytes that changed state.
 static uint64_t phys_update(uint64_t a, uint64_t n, bool map) {
     pthread_mutex_lock(&phys_lock);
-    if (!phys_bits && !(phys_bits = calloc(PHYS_PAGES / 64 + 1, 8))) FATAL("sin memoria para el mapa de páginas físicas\n");
+    if (!phys_bits && !(phys_bits = calloc(PHYS_PAGES / 64 + 1, 8))) FATAL("no memory for the physical page map\n");
     uint64_t changed = 0, pg = (a - ALIAS_BASE) >> 12, end = (a + n - ALIAS_BASE) >> 12;
     while (pg < end) {
         if (phys_test(pg) == map) { pg++; continue; }
-        uint64_t run = pg;  // las páginas seguidas que cambian, de una vez
+        uint64_t run = pg;  // the consecutive pages that change, all at once
         while (run < end && phys_test(run) != map) {
             if (map) phys_bits[run >> 6] |= 1ull << (run & 63);
             else phys_bits[run >> 6] &= ~(1ull << (run & 63));
@@ -159,7 +159,7 @@ static uint64_t phys_update(uint64_t a, uint64_t n, bool map) {
         }
         uint64_t ra = ALIAS_BASE + (pg << 12), rn = (run - pg) << 12;
         if (map) {
-            plat_commit(ra, rn);  // (Windows: de una vez, no una excepción por cada 64 KB al borrar)
+            plat_commit(ra, rn);  // (Windows: all at once, not one exception per 64 KB when clearing)
             memset((void *)(uintptr_t)ra, 0, rn);
         }
         changed += rn;
@@ -237,20 +237,21 @@ static KThread *g_threads;  // every thread of this boot (g_klock)
 
 void rt_unwind_point(void) {
     if (__builtin_expect(g_rt_unwind, 0) && t_cur) longjmp(t_cur->unwind, 1);
-    if (__builtin_expect(g_fnprof & 2, 0)) kernel_pause_point();  // (SMRPG: también punto seguro para la pausa)
+    if (__builtin_expect(g_fnprof & 2, 0)) kernel_pause_point();  // (SMRPG: also a safe point for the pause)
 }
 
-// SMRPG: pausa cooperativa de hilos (svc SetThreadActivity / GetThreadContext3). El GC de IL2CPP para a los demás hilos
-// con nn::os::SuspendThread y lee sus registros con nn::os::GetThreadContext para buscar raíces. Un hilo con la pausa
-// pedida se para en el siguiente punto seguro: la entrada de cualquier función del juego (FN_ENTER mira g_fnprof, cuyo
-// bit 2 dice que hay pausas pedidas), una llamada al sistema o una llamada al host (rt_unwind_point). Ahí todo su estado
-// de invitado está en su Cpu y no tiene ningún candado del runtime. No se congela el hilo del host en un punto cualquiera:
-// podría quedarse con un candado del runtime, del driver o de la biblioteca de C.
-static int g_npause;  // hilos con la pausa pedida (g_klock)
-static pthread_cond_t g_pause_cond = PTHREAD_COND_INITIALIZER;  // (g_klock) un hilo acaba de pararse
-// (SMRPG Android) La app en segundo plano (Inicio, otra app): todos los hilos del juego se paran en su siguiente punto
-// seguro, como congela la Switch el juego al pulsar Inicio; al volver siguen. Aparte de las pausas del GC (pause_req), que
-// no se tocan. ui_run (vulkan/device.c) lo pide con los avisos de SDL; LARECOMP_NO_BG_PAUSE=1: el juego sigue corriendo.
+// SMRPG: cooperative thread pausing (svc SetThreadActivity / GetThreadContext3). IL2CPP's GC stops the other threads
+// with nn::os::SuspendThread and reads their registers with nn::os::GetThreadContext to look for roots. A thread with a
+// pause requested stops at its next safe point: the entry of any game function (FN_ENTER checks g_fnprof, whose bit 2
+// says there are pauses requested), a system call or a call to the host (rt_unwind_point). There all of its guest state
+// is in its Cpu and it holds no runtime lock. The host thread is not frozen at an arbitrary point: it could be left
+// holding a lock of the runtime, the driver or the C library.
+static int g_npause;  // threads with a pause requested (g_klock)
+static pthread_cond_t g_pause_cond = PTHREAD_COND_INITIALIZER;  // (g_klock) a thread has just stopped
+// (SMRPG Android) The app in the background (Home, another app): all the game's threads stop at their next safe point,
+// the way the Switch freezes the game when Home is pressed; on coming back they go on. Separate from the GC's pauses
+// (pause_req), which are left alone. ui_run (vulkan/device.c) asks for it on SDL's notifications;
+// LARECOMP_NO_BG_PAUSE=1: the game keeps running.
 static volatile bool g_bg_pause;
 void kernel_background_pause(bool on) {
     static int off = -1;
@@ -263,9 +264,9 @@ void kernel_background_pause(bool on) {
             __atomic_or_fetch(&g_fnprof, 2, __ATOMIC_SEQ_CST);
         } else {
             if (g_npause == 0) __atomic_and_fetch(&g_fnprof, ~2, __ATOMIC_SEQ_CST);
-            for (KThread *t = g_threads; t; t = t->anext) wake(t);  // (los parados esperan en su cond)
+            for (KThread *t = g_threads; t; t = t->anext) wake(t);  // (the stopped ones wait on their cond)
         }
-        LOG("[kernel] %s\n", on ? "app en segundo plano: el juego se para" : "app de vuelta: el juego sigue");
+        LOG("[kernel] %s\n", on ? "app in the background: the game stops" : "app back: the game goes on");
     }
     pthread_mutex_unlock(&g_klock);
 }
@@ -285,7 +286,7 @@ void kernel_pause_point(void) {
     pthread_mutex_unlock(&g_klock);
 }
 
-// SMRPG: las últimas llamadas de cada hilo al host (HLE y llamadas al sistema), para los volcados.
+// SMRPG: each thread's last calls to the host (HLE and system calls), for the dumps.
 #define KCALLS 32
 void kernel_note_call(const char *name, const uint64_t *x, uint64_t lr) {
     KThread *t = t_cur;
@@ -298,16 +299,16 @@ void kernel_note_call(const char *name, const uint64_t *x, uint64_t lr) {
 static void print_calls(KThread *t, const char *prefix, unsigned max) {
     unsigned total = t->calls_n, n = total < KCALLS ? total : KCALLS;
     if (n > max) n = max;
-    for (unsigned j = total - n; j < total; j++) {  // (de la más antigua a la más reciente)
+    for (unsigned j = total - n; j < total; j++) {  // (oldest to newest)
         unsigned k = j % KCALLS;
-        LOG("%s  %s(%llx, %llx, %llx, %llx) desde %llx\n", prefix, t->calls[k].name ? t->calls[k].name : "?",
+        LOG("%s  %s(%llx, %llx, %llx, %llx) from %llx\n", prefix, t->calls[k].name ? t->calls[k].name : "?",
             (unsigned long long)t->calls[k].x[0], (unsigned long long)t->calls[k].x[1], (unsigned long long)t->calls[k].x[2],
             (unsigned long long)t->calls[k].x[3], (unsigned long long)t->calls[k].lr);
     }
 }
 void kernel_print_current_calls(void) {
     if (!t_cur || !t_cur->calls_n) return;
-    LOG("últimas llamadas al host de este hilo:\n");
+    LOG("this thread's last calls to the host:\n");
     print_calls(t_cur, "", KCALLS);
 }
 static const char *svc_name(uint32_t imm) {
@@ -329,8 +330,8 @@ static const char *svc_name(uint32_t imm) {
     return imm < 0x80 && names[imm] ? names[imm] : "svc ?";
 }
 
-// El contexto de un hilo como lo da svcGetThreadContext3 (0x320 bytes): x0-x28, fp, lr, sp, pc, pstate, v0-v31, fpcr,
-// fpsr y tpidr.
+// A thread's context as svcGetThreadContext3 gives it (0x320 bytes): x0-x28, fp, lr, sp, pc, pstate, v0-v31, fpcr, fpsr
+// and tpidr.
 static void thread_context_write(KThread *t, uint64_t out) {
     uint8_t *p = (uint8_t *)(uintptr_t)out;
     Cpu *c = &t->cpu;
@@ -352,7 +353,7 @@ static void *thread_main(void *arg) {
     KThread *t = arg;
     t_cur = t;
     plat_thread_guest(t->prio);
-    {   // (SMRPG: el nombre en /proc y «top -H», para ver quién gasta la CPU)
+    {   // (SMRPG: the name in /proc and "top -H", to see who uses the CPU)
         static int guest_n;
         char nm[16];
         if (t->is_main) snprintf(nm, sizeof nm, "guest-main");
@@ -422,9 +423,9 @@ static void *hang_watch(void *arg);
 
 void kernel_run_main(KThread *t, uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3) {
     t->cpu.x[0] = x0; t->cpu.x[1] = x1; t->cpu.x[2] = x2; t->cpu.x[3] = x3;
-    // SMRPG: LARECOMP_WATCH_ADDR=<lo>,<hi> vigila quién toca esa memoria desde el arranque (antes solo lo armaban
-    // funciones de Link's Awakening)
-    if (getenv("LARECOMP_WATCH_ADDR")) { extern void watch_arm(void); LOG("[watch] armando %s\n", getenv("LARECOMP_WATCH_ADDR")); watch_arm(); }
+    // SMRPG: LARECOMP_WATCH_ADDR=<lo>,<hi> watches who touches that memory from boot onward (before, only Link's
+    // Awakening functions armed it)
+    if (getenv("LARECOMP_WATCH_ADDR")) { extern void watch_arm(void); LOG("[watch] arming %s\n", getenv("LARECOMP_WATCH_ADDR")); watch_arm(); }
     thread_start(t);  // the host main thread goes on to run the window event loop
     pthread_mutex_lock(&g_klock);
     g_main_thread = t;
@@ -530,7 +531,7 @@ static uint32_t block_current(int64_t timeout_ns) {
 // (diagnostics) the last KTRACE_N condition variable (untimed waits) / mutex kernel calls, lock-free, for the [hang] dump: what each
 // thread did with which key / mutex word, and the words before and after. LARECOMP_KTRACE=0 turns it off.
 enum { KT_WAIT, KT_WAIT_END, KT_SIGNAL, KT_LOCK, KT_LOCK_END, KT_UNLOCK };
-#define KTRACE_N 2048  // (SMRPG: 256 no llegaba al momento en que se paraban los hilos)
+#define KTRACE_N 2048  // (SMRPG: 256 did not reach back to when the threads stopped)
 typedef struct { uint64_t ns, tid, addr, addr2; uint32_t w0, w1, w2, arg, kind; } KTrace;
 static KTrace ktrace[KTRACE_N];
 static uint64_t ktrace_n;  // (__atomic builtins)
@@ -587,12 +588,13 @@ static uint32_t svc_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t
     pthread_mutex_lock(&g_klock);
     KThread *t = t_cur;
     uint32_t mbefore = rdw(mutex), kbefore = rdw(key);
-    // SMRPG: la marca «hay esperas» de la condvar se escribe ANTES de soltar el mutex, como hace el kernel de la Switch
-    // (mesosphere, KConditionVariable::Wait). El Signal/Broadcast del SDK (InternalConditionVariableImplByHorizon) lee
-    // esa palabra y no llama al kernel si vale 0. Con el orden al revés, otro hilo cogía el mutex justo al soltarlo aquí
-    // (por la vía rápida, sin g_klock), cambiaba el estado (ReleaseSemaphore: cuenta + 1), veía la marca a 0 y no
-    // despertaba a nadie; este hilo se dormía con la cuenta ya a 1. Así se quedaba dormido para siempre
-    // UnityGfxDeviceWorker con las órdenes del hilo principal sin leer (y la carga de «level0» sin terminar).
+    // SMRPG: the condvar's "has waiters" flag is written BEFORE releasing the mutex, as the Switch kernel does
+    // (mesosphere, KConditionVariable::Wait). The SDK's Signal/Broadcast (InternalConditionVariableImplByHorizon) reads
+    // that word and does not call the kernel if it is 0. With the order reversed, another thread took the mutex right
+    // as it was released here (through the fast path, without g_klock), changed the state (ReleaseSemaphore: count +
+    // 1), saw the flag at 0 and woke nobody; this thread went to sleep with the count already at 1. That is how
+    // UnityGfxDeviceWorker stayed asleep forever with the main thread's commands unread (and the "level0" load
+    // unfinished).
     __atomic_store_n(u32p(key), 1, __ATOMIC_SEQ_CST);
     mutex_release(mutex);
     bool traced = !kt_timed_key(key, timeout >= 0);
@@ -775,8 +777,8 @@ static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc) {
     rt_unwind_point();
     KThread *t = t_cur;
-    if (t) t->in_svc = true;  // (SMRPG: su estado de invitado ya está en cpu: GetThreadContext3 no tiene que esperarlo)
-    if (t && imm != 0x1E) kernel_note_call(svc_name(imm), c->x, pc);  // (GetSystemTick es constante: llenaría el anillo)
+    if (t) t->in_svc = true;  // (SMRPG: its guest state is already in cpu: GetThreadContext3 need not wait for it)
+    if (t && imm != 0x1E) kernel_note_call(svc_name(imm), c->x, pc);  // (constant GetSystemTick would fill the ring)
     svc_entry(c, imm, pc);
     if (t) t->in_svc = false;
     rt_unwind_point();
@@ -991,12 +993,12 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
     }
     case 0x26: {  // Break(reason, info, size)
         if (x[0] & 0x80000000u) { LOG("[kernel] Break notification %llx\n", x[0]); x[0] = R_OK; break; }
-        // Sin el bit de «solo aviso», la Switch termina el proceso (sin depurador conectado). El motivo 0 es Panic: es
-        // lo que hace nn::diag::detail::AbortImpl (NN_ABORT / R_ABORT_UNLESS), no un «continuar».
+        // Without the "notification only" bit, the Switch terminates the process (with no debugger attached). Reason 0
+        // is Panic: it is what nn::diag::detail::AbortImpl does (NN_ABORT / R_ABORT_UNLESS), not a "continue".
         static const char *const why[] = {"Panic (abort)", "Assert", "User", "PreLoadDll", "PostLoadDll",
                                           "PreUnloadDll", "PostUnloadDll", "CppException"};
         uint32_t reason = (uint32_t)x[0];
-        LOG("[kernel] svcBreak: %s, info %llx (%llu bytes), lr %llx\n", reason < 8 ? why[reason] : "motivo desconocido",
+        LOG("[kernel] svcBreak: %s, info %llx (%llu bytes), lr %llx\n", reason < 8 ? why[reason] : "unknown reason",
             (unsigned long long)x[1], (unsigned long long)x[2], (unsigned long long)x[30]);
         if (x[1] >= GUEST_LO && x[1] < GUEST_HI && x[2]) {
             const uint8_t *p = (const uint8_t *)(uintptr_t)x[1];
@@ -1005,7 +1007,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
             LOG("\n");
         }
         uint32_t tr = g_terminate_result;
-        if (tr) LOG("[kernel] resultado de cierre que dejó el juego: %04u-%04u (0x%x)\n", 2000 + (tr & 0x1FF), (tr >> 9) & 0x1FFF, tr);
+        if (tr) LOG("[kernel] exit result the game left: %04u-%04u (0x%x)\n", 2000 + (tr & 0x1FF), (tr >> 9) & 0x1FFF, tr);
         FATAL("svcBreak(reason=%llx, info=%llx, size=%llx) at %llx\n", x[0], x[1], x[2], pc);
     }
     case 0x27: debug_string(x[0], x[1]); x[0] = R_OK; break;
@@ -1021,9 +1023,9 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 4: v = HEAP_BASE; break;
         case 5: v = HEAP_MAX; break;
         case 6: case 21: v = 0xCD500000ull; break;  // application memory (3.2 GB, as on hardware)
-        // Memoria usada (7: toda, 22: sin la del sistema), en bytes como en la Switch: el heap, ~64 MB de módulos y pilas,
-        // y lo que el juego tiene mapeado con MapPhysicalMemory. El nninitStartup de SMRPG reserva (6 - 7) para su
-        // StandardAllocator.
+        // Used memory (7: all of it, 22: without the system's), in bytes as on the Switch: the heap, ~64 MB of modules
+        // and stacks, and what the game has mapped with MapPhysicalMemory. SMRPG's nninitStartup reserves (6 - 7) for
+        // its StandardAllocator.
         case 7: case 22: v = heap_size + 0x4000000 + __atomic_load_n(&phys_mapped, __ATOMIC_RELAXED); break;
         case 8: v = 0; break;  // DebuggerAttached
         case 9: v = 0; break;  // ResourceLimit
@@ -1032,19 +1034,19 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 13: v = GUEST_HI - GUEST_LO; break;
         case 14: v = STACK_BASE; break;
         case 15: v = STACK_SIZE; break;
-        // El «system resource» del NPDM (SMRPG: 16 MB). nn::os::IsVirtualAddressMemoryEnabled es «16 != 0», y entonces el
-        // VammManager reparte la región alias (2/3). El usado: lo mismo que contesta nxnative.
+        // The NPDM's "system resource" (SMRPG: 16 MB). nn::os::IsVirtualAddressMemoryEnabled is "16 != 0", and then
+        // VammManager hands out the alias region (2/3). The used size: the same as nxnative answers.
         case 16: v = proc_system_resource; break;
         case 17: v = proc_system_resource ? 0x400000 : 0; break;
         case 18: v = proc_program_id; break;
-        // Página de contexto de excepción: los SDK nuevos escriben ahí (SetDyingMessageRegion, +0x1c0); con 0 escribirían
-        // en un puntero nulo.
+        // Exception context page: newer SDKs write there (SetDyingMessageRegion, +0x1c0); with 0 they would write to a
+        // null pointer.
         case 20:
             if (!exc_ctx_page) exc_ctx_page = (uint64_t)(uintptr_t)hle_alloc(0x1000);
             v = exc_ctx_page;
             break;
         case 23: v = 1; break;  // IsApplication
-        case 24: {  // FreeThreadCount: el límite de hilos de una aplicación (96) menos los que siguen vivos, como el kernel
+        case 24: {  // FreeThreadCount: an application's thread limit (96) minus the ones still alive, like the kernel
             int live = 0;
             pthread_mutex_lock(&g_klock);
             for (KThread *t = g_threads; t; t = t->anext) live += !t->finished;
@@ -1058,7 +1060,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
             static uint8_t seen[64];
             if (id0 >= 64 || !seen[id0]) {
                 if (id0 < 64) seen[id0] = 1;
-                LOG("[kernel] GetInfo: tipo desconocido %u/%llu\n", id0, (unsigned long long)x[3]);
+                LOG("[kernel] GetInfo: unknown type %u/%llu\n", id0, (unsigned long long)x[3]);
             }
         }
         }
@@ -1066,10 +1068,10 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         x[1] = v;
         break;
     }
-    // Memoria física (la usa el VammManager de nn::os). Como en la Switch: dirección y tamaño alineados a página, solo
-    // dentro de la región alias, y solo cambian las páginas que no estaban ya en ese estado (ver phys_update). No van a
-    // la lista de regiones: el juego hace miles de mapeos y desmapeos parciales (la lista tiene 1024 huecos y solo quita
-    // por dirección de inicio).
+    // Physical memory (used by nn::os's VammManager). As on the Switch: page-aligned address and size, only inside the
+    // alias region, and only the pages that were not already in that state change (see phys_update). They do not go
+    // into the region list: the game does thousands of partial maps and unmaps (the list has 1024 slots and only
+    // removes by start address).
     case 0x2C:    // MapPhysicalMemory(addr, size)
     case 0x2D: {  // UnmapPhysicalMemory(addr, size)
         uint64_t a = x[0], n = x[1];
@@ -1078,16 +1080,16 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         if (a < ALIAS_BASE || a + n > ALIAS_BASE + ALIAS_SIZE || a + n < a) { x[0] = R_INVALID_MEMORY_REGION; break; }
         uint64_t changed = phys_update(a, n, imm == 0x2C);
         if (imm == 0x2C) __atomic_add_fetch(&phys_mapped, changed, __ATOMIC_SEQ_CST);
-        else __atomic_sub_fetch(&phys_mapped, changed, __ATOMIC_SEQ_CST);  // (solo las que estaban mapeadas: no baja de 0)
+        else __atomic_sub_fetch(&phys_mapped, changed, __ATOMIC_SEQ_CST);  // (only those mapped: never goes below 0)
         x[0] = R_OK;
         break;
     }
-    // SMRPG: pausa cooperativa (ver kernel_pause_point): el GC de IL2CPP para a los demás hilos y lee sus registros.
-    case 0x32: {  // SetThreadActivity(handle, activity): 0 = en marcha, 1 = pausado
+    // SMRPG: cooperative pause (see kernel_pause_point): IL2CPP's GC stops the other threads and reads their registers.
+    case 0x32: {  // SetThreadActivity(handle, activity): 0 = running, 1 = paused
         KObject *o = handle_get((uint32_t)x[0]);
         KThread *t = o && o->type == KOBJ_THREAD ? (KThread *)o : NULL;
         if (!t) { x[0] = R_INVALID_HANDLE; break; }
-        if (t == t_cur) { x[0] = R_BUSY; break; }  // (un hilo no se pausa a sí mismo)
+        if (t == t_cur) { x[0] = R_BUSY; break; }  // (a thread does not pause itself)
         if (x[1] > 1) { x[0] = R_INVALID_ENUM; break; }
         pthread_mutex_lock(&g_klock);
         if (x[1] == 1 && !t->pause_req) {
@@ -1095,7 +1097,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
             if (g_npause++ == 0) __atomic_or_fetch(&g_fnprof, 2, __ATOMIC_SEQ_CST);
         } else if (x[1] == 0 && t->pause_req) {
             t->pause_req = false;
-            // (SMRPG Android: con la app en segundo plano los puntos seguros siguen hacen falta: kernel_background_pause)
+            // (SMRPG Android: with the app in the background the safe points are still needed: kernel_background_pause)
             if (--g_npause == 0 && !g_bg_pause) __atomic_and_fetch(&g_fnprof, ~2, __ATOMIC_SEQ_CST);
             wake(t);
         }
@@ -1103,14 +1105,14 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         x[0] = R_OK;
         break;
     }
-    case 0x33: {  // GetThreadContext3(out, handle): solo de un hilo pausado
+    case 0x33: {  // GetThreadContext3(out, handle): only for a paused thread
         KObject *o = handle_get((uint32_t)x[1]);
         KThread *t = o && o->type == KOBJ_THREAD ? (KThread *)o : NULL;
         if (!t) { x[0] = R_INVALID_HANDLE; break; }
         if (t == t_cur) { x[0] = R_BUSY; break; }
         pthread_mutex_lock(&g_klock);
         if (!t->pause_req) { pthread_mutex_unlock(&g_klock); x[0] = R_INVALID_STATE; break; }
-        // espera a que se pare en un punto seguro (o a que esté dentro de una llamada al sistema, sin arrancar o terminado)
+        // wait for it to stop at a safe point (or to be inside a system call, not started or finished)
         struct timespec ts;
         deadline(&ts, 500000000);
         bool late = false;
@@ -1119,7 +1121,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         thread_context_write(t, x[0]);
         pthread_mutex_unlock(&g_klock);
         if (late)
-            LOG("[kernel] GetThreadContext3: el hilo %llu no llegó a un punto seguro en 500 ms; contexto aproximado\n",
+            LOG("[kernel] GetThreadContext3: thread %llu did not reach a safe point in 500 ms; approximate context\n",
                 (unsigned long long)t->id);
         x[0] = R_OK;
         break;
@@ -1198,17 +1200,17 @@ void kernel_dump_threads(const char *prefix) {
             (unsigned long long)t->wait_mutex, t->wait_tag,
             t->in_sync_wait ? " in WaitSynchronization" : "", t->cancel ? " (cancel pending)" : "",
             waiting ? (unsigned long long)((now - t->wait_since) / 1000000) : 0ull);
-        {  // SMRPG: el nombre que le dio el juego (nn::os::SetThreadName): ThreadType* en TLS+0x1f8, nombre en +0x1a0
+        {  // SMRPG: the name the game gave it (nn::os::SetThreadName): ThreadType* at TLS+0x1f8, name at +0x1a0
             uint64_t tt = *(volatile uint64_t *)(uintptr_t)(t->tlr + 0x1f8), np = 0;
             if (tt >= GUEST_LO && tt < GUEST_HI) np = *(volatile uint64_t *)(uintptr_t)(tt + 0x1a0);
-            if (np >= GUEST_LO && np < GUEST_HI) LOG("%s   nombre «%.32s»\n", prefix, (const char *)(uintptr_t)np);
+            if (np >= GUEST_LO && np < GUEST_HI) LOG("%s   name \"%.32s\"\n", prefix, (const char *)(uintptr_t)np);
         }
-        if (t->calls_n) {  // (SMRPG) sus últimas llamadas al host
+        if (t->calls_n) {  // (SMRPG) its last calls to the host
             char p2[64];
             snprintf(p2, sizeof p2, "%s   ", prefix);
             print_calls(t, p2, 10);
         }
-        if (waiting)  // (SMRPG) sus registros que se conservan entre llamadas: suelen llevar los objetos de quien espera
+        if (waiting)  // (SMRPG) its callee-saved registers: they usually hold the waiter's objects
             LOG("%s   x19 %llx x20 %llx x21 %llx x22 %llx x23 %llx x24 %llx x25 %llx x26 %llx x27 %llx x28 %llx sp %llx\n",
                 prefix, (unsigned long long)t->cpu.x[19], (unsigned long long)t->cpu.x[20], (unsigned long long)t->cpu.x[21],
                 (unsigned long long)t->cpu.x[22], (unsigned long long)t->cpu.x[23], (unsigned long long)t->cpu.x[24],
@@ -1272,7 +1274,7 @@ void kernel_hang_hooks(bool (*check)(uint64_t limit_ns, char *why, size_t n), vo
     __atomic_store_n(&hang_check_fn, check, __ATOMIC_RELEASE);
 }
 static void *hang_watch(void *arg) {
-    plat_thread_name("hang-watch");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("hang-watch");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     uint64_t s = (uint64_t)(uintptr_t)arg, dumped_since = 0;
     for (int dumps = 0; dumps < 6;) {
         sleep(1);
@@ -1298,10 +1300,10 @@ static void *hang_watch(void *arg) {
         void (*state)(const char *) = __atomic_load_n(&hang_state_fn, __ATOMIC_ACQUIRE);
         if (state) state("[hang]");
         kernel_dump_threads("[hang]");
-        {  // SMRPG: con LARECOMP_FNPROF=0:<n>, los recuentos de funciones del juego hasta este momento
+        {  // SMRPG: with LARECOMP_FNPROF=0:<n>, the game function counts up to this point
             extern void fnprof_dump(const char *out);
             char out[64];
-            snprintf(out, sizeof out, "build/fnprof_cuelgue%d.txt", dumps);
+            snprintf(out, sizeof out, "build/fnprof_hang%d.txt", dumps);
             fnprof_dump(out);
         }
         LOG("[hang] =====\n");
@@ -1327,7 +1329,7 @@ void kernel_reset(void) {
     nregions = 0;
     heap_size = 0;
     phys_mapped = 0;
-    if (phys_bits) memset(phys_bits, 0, (PHYS_PAGES / 64 + 1) * 8);  // (la memoria del invitado se borra entera)
+    if (phys_bits) memset(phys_bits, 0, (PHYS_PAGES / 64 + 1) * 8);  // (all of the guest's memory is cleared)
     g_npause = 0;
     __atomic_and_fetch(&g_fnprof, ~2, __ATOMIC_SEQ_CST);
     exc_ctx_page = 0;

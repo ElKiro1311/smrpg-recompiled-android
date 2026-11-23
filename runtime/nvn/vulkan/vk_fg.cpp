@@ -1,23 +1,25 @@
-// (SMRPG) Generación de fotogramas de AMD FSR (SDK 2.4, amd_fidelityfx_framegeneration_vk.dll junto al ejecutable):
-// FSR Frame Generation 4.0.2 (red neuronal) en las Radeon RX 9000, 3.1.6 en las demás. Cada fotograma que presenta el
-// juego, la swapchain de AMD presenta antes uno generado entre él y el anterior, en su propia cola y con sus propios
-// hilos de ritmo: en pantalla, el doble de imágenes por segundo.
+// (SMRPG) AMD FSR frame generation (SDK 2.4, amd_fidelityfx_framegeneration_vk.dll next to the executable): FSR Frame
+// Generation 4.0.2 (neural network) on the Radeon RX 9000, 3.1.6 on the rest. For every frame the game presents, AMD's
+// swapchain first presents one generated between it and the previous one, on its own queue and with its own pacing
+// threads: on screen, twice the frames per second.
 //
-// Adaptado de una integración propia anterior del SDK 2 de AMD (la aportada a NX2navi, vk_fg.cpp). Cómo encaja aquí:
-// - device.c crea dos colas más de la familia gráfica (vk_fg_queue_count, vk_fg_queues) y, mientras se quiere la
-//   generación (el ajuste, con AMD FSR como antialiasing), hace la swapchain con vk_fg_create_swapchain y adquiere con
-//   vk_fg_acquire. La cola del juego es del hilo grabador (record.c): presenta con vk_fg_present, y AMD entrega en ella
-//   su trabajo (la generación) dentro de esa misma llamada; submit_game lo hace con el cerrojo de la cola por si acaso.
-// - El orden que exige FG 4 (configurar, preparar, generar) va en el del hilo grabador: exec.c, tras FSR, encola
-//   vk_fg_prepare_record (configura el fotograma y graba la preparación con la profundidad y los vectores de FSR y la
-//   cámara); antes de entregar la ventana, vk_fg_frame_end_record configura sin generación los fotogramas que no
-//   llegaron a FSR (pantallas sin la pasada de movimiento); la presentación genera.
-// - El objeto VkSwapchainKHR es el de AMD: otro tamaño lo recrea en su sitio; se destruye solo tras sus contextos. Antes
-//   de que el contexto de generación se vaya o la swapchain se recree, la generación se apaga en ella (el orden de AMD).
-//   Una recreación en el sitio conserva sus cuentas de imágenes adquiridas y presentadas; si no cuadran (una adquirida
-//   que no se presentó), otro formato o una recreación fallida, se rehace todo.
-// - La interfaz del juego va dentro de la imagen y se interpola con ella (en SMRPG casi no se mueve); el menú del
-//   runtime pausa la generación.
+// Adapted from our own earlier integration of AMD's SDK 2 (the one contributed to NX2navi, vk_fg.cpp). How it fits in
+// here:
+// - device.c creates two more queues of the graphics family (vk_fg_queue_count, vk_fg_queues) and, while generation is
+//   wanted (the setting, with AMD FSR as anti-aliasing), makes the swapchain with vk_fg_create_swapchain and acquires
+//   with vk_fg_acquire. The game queue belongs to the recorder thread (record.c): it presents with vk_fg_present, and
+//   AMD submits its work (the generation) to it inside that same call; submit_game does so under the queue lock just in
+//   case.
+// - The order FG 4 requires (configure, prepare, generate) is the recorder thread's: exec.c, after FSR, queues
+//   vk_fg_prepare_record (configures the frame and records the preparation with FSR's depth and motion vectors and the
+//   camera); before the window is submitted, vk_fg_frame_end_record configures the frames that didn't reach FSR
+//   (screens without the motion pass) without generation; the present generates.
+// - The VkSwapchainKHR object is AMD's: another size recreates it in place; it is only destroyed after its contexts.
+//   Before the generation context goes away or the swapchain is recreated, generation is turned off on it (AMD's
+//   order). An in-place recreation keeps its counts of acquired and presented images; if they don't match (one acquired
+//   but not presented), on another format or on a failed recreation, everything is remade.
+// - The game's UI is inside the image and is interpolated with it (in SMRPG it hardly moves); the runtime menu pauses
+//   generation.
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -35,11 +37,11 @@
 #include "../../../third_party/amd-fsr/framegeneration/include/vk/ffx_api_framegeneration_vk.h"
 #include "vk_fg.h"
 
-extern "C" void vk_queue_lock(void);    // (record.c) la cola del juego
+extern "C" void vk_queue_lock(void);    // (record.c) the game queue
 extern "C" void vk_queue_unlock(void);
 extern "C" void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);  // (device.c)
 
-static void flog(const char *fmt, ...) {  // (una sola escritura por línea, como rt_log)
+static void flog(const char *fmt, ...) {  // (a single write per line, like rt_log)
     char b[1024];
     va_list ap;
     va_start(ap, fmt);
@@ -53,7 +55,7 @@ static void flog(const char *fmt, ...) {  // (una sola escritura por línea, com
 
 namespace {
 
-struct Shot {  // (pruebas, LARECOMP_FG_PSHOT) una imagen presentada, copiada a un búfer visible desde la CPU
+struct Shot {  // (tests, LARECOMP_FG_PSHOT) a presented image, copied to a CPU-visible buffer
     VkBuffer buf = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     void *ptr = nullptr;
@@ -64,37 +66,37 @@ struct Shot {  // (pruebas, LARECOMP_FG_PSHOT) una imagen presentada, copiada a 
 struct {
     VkQueue game = VK_NULL_HANDLE, present = VK_NULL_HANDLE, acquire = VK_NULL_HANDLE;
     uint32_t family = 0;
-    ffxContext sc = nullptr;  // el contexto de la swapchain
-    ffxContext fg = nullptr;  // el de la generación
+    ffxContext sc = nullptr;  // the swapchain context
+    ffxContext fg = nullptr;  // the generation context
     ffxQueryDescSwapchainReplacementFunctionsVK fn = {};
-    // el objeto swapchain de AMD (cur), el que device.c soltó (pending: la creación siguiente lo recrea en su sitio o
-    // vk_fg_release lo destruye), el formato y el espacio de color con que se hizo, su tamaño
+    // AMD's swapchain object (cur), the one device.c released (pending: the next creation recreates it in place or
+    // vk_fg_release destroys it), the format and color space it was made with, its size
     VkSwapchainKHR cur = VK_NULL_HANDLE, pending = VK_NULL_HANDLE;
     VkFormat sc_fmt = VK_FORMAT_UNDEFINED;
     VkColorSpaceKHR sc_cs = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D sc_ext = {0, 0};
-    // el contexto de generación: para qué pantalla, formato, tamaño de escena máximo, versión y profundidad se hizo
+    // the generation context: which display, format, maximum scene size, version and depth it was made for
     VkExtent2D fg_ext = {0, 0}, fg_max = {0, 0};
     VkFormat fg_fmt = VK_FORMAT_UNDEFINED;
     int fg_version = -1;
     bool fg_inverted = false, fg4 = false;
-    std::atomic<int> rebuild{0};  // (grabador → device.c) el contexto de generación no sirve: recrear la swapchain
-    // imágenes adquiridas (hilo traductor) y presentadas (grabador) desde que se hizo el objeto: iguales cuando ninguna
-    // espera su presentación (se comparan con el grabador quieto)
+    std::atomic<int> rebuild{0};  // (recorder → device.c) the generation context is unusable: recreate the swapchain
+    // images acquired (translating thread) and presented (recorder) since the object was made: equal when none is
+    // waiting for its present (compared with the recorder idle)
     std::atomic<uint64_t> acquired{0}, presented{0};
-    // (grabador) el número del último fotograma configurado y en qué presentación; presentaciones hechas
+    // (recorder) the number of the last configured frame and at which present; presents made
     uint64_t frame = 0, configured_at = ~0ull, presents = 0;
     std::atomic<int> on{0};
     int failed = 0;
-    FgCamera cam = {};  // la última cámara buena (un fotograma sin la suya usa esta)
+    FgCamera cam = {};  // the last good camera (a frame without its own uses this one)
     uint64_t generated = 0, prepared = 0, paused = 0, no_inputs = 0, no_camera = 0, hudless = 0;
     std::chrono::steady_clock::time_point last_prepare;
     char status[200] = "";
 } F;
 
 const FsrApi *api(void) { return vk_fsr_api(); }
-// (SMRPG) la memoria de vídeo de la generación de fotogramas (su contexto y su swapchain, según AMD; se mide al crearlos):
-// para el medidor del menú, runtime/ui/perf_meter.c
+// (SMRPG) frame generation's video memory (its context and its swapchain, according to AMD; measured when they are
+// created): for the menu's meter, runtime/ui/perf_meter.c
 static uint64_t g_fg_vram_ctx, g_fg_vram_sc;
 extern "C" uint64_t vk_fg_vram(void) { return g_fg_vram_ctx + g_fg_vram_sc; }
 
@@ -114,8 +116,8 @@ const char *provider(ffxContext *c) {
     return c && *c && api_query(c, &v.header) == FFX_API_RETURN_OK && v.versionName ? v.versionName : "?";
 }
 
-// La cola del juego es del hilo grabador; AMD entrega en ella desde la presentación, que corre en ese hilo. El cerrojo,
-// por si alguna versión lo hiciera desde otro (record.c también lo toma en las suyas).
+// The game queue belongs to the recorder thread; AMD submits to it from the present, which runs on that thread. The
+// lock is in case some version did so from another (record.c takes it too, for its own submissions).
 VkResult submit_game(uint32_t n, const VkSubmitInfo *si, VkFence fence) {
     vk_queue_lock();
     VkResult r = vkQueueSubmit(F.game, n, si, fence);
@@ -146,7 +148,7 @@ void layout_barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImage
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
-// (pruebas) copia una imagen de AMD (en el estado que dice) a un búfer visible desde la CPU, dejándola como estaba
+// (tests) copies an AMD image (in the state it says) to a CPU-visible buffer, leaving it as it was
 bool shot_copy(VkCommandBuffer cb, const FfxApiResource &r, Shot &s) {
     VkImage img = (VkImage)r.resource;
     uint32_t w = r.description.width, h = r.description.height;
@@ -205,10 +207,10 @@ void shot_save(const Shot &s, const char *path) {
     free(px);
 }
 
-// La llamada de AMD para generar (en la presentación, hilo grabador): graba la generación en la lista que da
+// AMD's callback to generate (in the present, recorder thread): records the generation into the list it provides
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration *d, void *user) {
     ffxContext *ctx = (ffxContext *)user;
-    if (!ctx || !*ctx) {  // sin contexto (ya): nada generado, la swapchain no presenta una imagen vieja
+    if (!ctx || !*ctx) {  // no context (any more): nothing generated, the swapchain doesn't present a stale image
         d->numGeneratedFrames = 0;
         return FFX_API_RETURN_ERROR;
     }
@@ -221,9 +223,9 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration *d, void *user) {
     return r;
 }
 
-// (pruebas, LARECOMP_FG_PSHOT=N) La composición de AMD hecha aquí, como la suya sin llamada (la imagen, real o generada,
-// copiada a la de la swapchain real), y desde el fotograma N seis imágenes seguidas tal como se presentan
-// (build/fg_pres_<i>_<real|generado>.png). Corre en el hilo de presentación de AMD, con su cola.
+// (tests, LARECOMP_FG_PSHOT=N) AMD's composition done here, like its own without a callback (the image, real or
+// generated, copied to the real swapchain's), and from frame N on, six consecutive images exactly as presented
+// (build/fg_pres_<i>_<real|generado>.png). Runs on AMD's present thread, with its queue.
 struct {
     long at = -1;
     int n = 0, logged = 0;
@@ -239,9 +241,9 @@ ffxReturnCode_t present_cb(ffxCallbackDescFrameGenerationPresent *p, void *) {
     VkImage si = (VkImage)src.resource, di = (VkImage)dst.resource;
     if (P.logged < 2) {
         P.logged++;
-        flog("[fg] composición: imagen %ux%u (formato %u, estado %u) -> salida %ux%u (formato %u, estado %u), %s",
+        flog("[fg] composition: image %ux%u (format %u, state %u) -> output %ux%u (format %u, state %u), %s",
              src.description.width, src.description.height, src.description.format, src.state, dst.description.width,
-             dst.description.height, dst.description.format, dst.state, p->isGeneratedFrame ? "generada" : "real");
+             dst.description.height, dst.description.format, dst.state, p->isGeneratedFrame ? "generated" : "real");
     }
     if (!cb || !si || !di) return FFX_API_RETURN_ERROR;
     if (P.n < 6 && (long)F.presents + 1 >= P.at && shot_copy(cb, src, P.img[P.n])) {
@@ -262,8 +264,8 @@ ffxReturnCode_t present_cb(ffxCallbackDescFrameGenerationPresent *p, void *) {
     return FFX_API_RETURN_OK;
 }
 
-// La generación apagada en la swapchain de AMD swc (sin llamadas ni imágenes): su presentador espera las
-// presentaciones en curso y para; la próxima configuración con generación la vuelve a poner en marcha.
+// Generation off on AMD's swapchain swc (no callbacks or images): its presenter waits for the presents in flight and
+// stops; the next configuration with generation starts it again.
 void fg_disable(VkSwapchainKHR swc) {
     F.on.store(0, std::memory_order_relaxed);
     if (!F.fg || !swc) return;
@@ -284,8 +286,8 @@ void destroy_fg(void) {
     F.fg_version = -1;
 }
 
-// Todo abajo en el orden de AMD: la generación apagada, su contexto, el de la swapchain y el objeto swapchain de AMD
-// (el que device.c soltó o el actual)
+// Everything torn down in AMD's order: generation off, its context, the swapchain's and AMD's swapchain object (the one
+// device.c released or the current one)
 void teardown(void) {
     VkSwapchainKHR obj = F.pending ? F.pending : F.cur;
     if (api()) {
@@ -304,11 +306,11 @@ void teardown(void) {
 }
 
 void fail(const char *what, unsigned r) {
-    flog("[fg] %s falló (%u): sin generación de fotogramas hasta reiniciar", what, r);
-    snprintf(F.status, sizeof F.status, "error (%s: %u); se apaga hasta reiniciar el juego", what, r);
+    flog("[fg] %s failed (%u): no frame generation until the game restarts", what, r);
+    snprintf(F.status, sizeof F.status, "error (%s: %u); off until the game restarts", what, r);
     F.failed = 1;
-    // apagada en la swapchain de AMD al momento; las presentaciones siguen por ella (vk_fg_active) hasta que device.c
-    // la cambia por una normal (vk_fg_usable es false tras un fallo)
+    // turned off on AMD's swapchain right away; presents keep going through it (vk_fg_active) until device.c swaps it
+    // for a normal one (vk_fg_usable is false after a failure)
     fg_disable(F.cur);
 }
 
@@ -347,20 +349,20 @@ bool hdr_format(VkFormat f) {
     return f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || f == VK_FORMAT_A2R10G10B10_UNORM_PACK32 || f == VK_FORMAT_R16G16B16A16_SFLOAT;
 }
 
-void amd_message(uint32_t type, const wchar_t *m) {  // (los avisos del SDK, al registro; los 200 primeros)
+void amd_message(uint32_t type, const wchar_t *m) {  // (the SDK's messages, to the log; the first 200)
     static int n;
     if (n++ >= 200) return;
     char b[600];
     size_t i = 0;
     for (; m && m[i] && i < sizeof b - 1; i++) b[i] = m[i] < 128 ? (char)m[i] : '?';
     b[i] = 0;
-    flog("[fg] AMD %s: %s", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "aviso", b);
+    flog("[fg] AMD %s: %s", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "warning", b);
 }
 
-// El contexto de generación para la pantalla de la swapchain y escenas de hasta max_render
+// The generation context for the swapchain's display and scenes of up to max_render
 bool create_fg(VkExtent2D max_render, int version, bool inverted) {
     static bool listed;
-    if (!listed) {  // las versiones que ofrece el SDK en esta tarjeta (al registro, una vez)
+    if (!listed) {  // the versions the SDK offers on this GPU (to the log, once)
         listed = true;
         VkDeviceContext dc = {api()->dev, api()->phys, api()->gdpa};
         uint64_t count = 16, ids[16] = {};
@@ -378,14 +380,14 @@ bool create_fg(VkExtent2D max_render, int version, bool inverted) {
                 if (i) strncat(list, ", ", sizeof list - strlen(list) - 1);
                 strncat(list, names[i] ? names[i] : "?", sizeof list - strlen(list) - 1);
             }
-        flog("[fg] versiones de la generación de fotogramas en esta tarjeta: %s", list[0] ? list : "(ninguna)");
+        flog("[fg] frame generation versions on this GPU: %s", list[0] ? list : "(none)");
     }
     ffxCreateBackendVKDesc be = {};
     be.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     be.deviceContext.vkDevice = api()->dev;
     be.deviceContext.vkPhysicalDevice = api()->phys;
     be.deviceContext.vkDeviceProcAddr = api()->gdpa;
-    ffxCreateContextDescFrameGenerationVersion ver = {};  // (obligatorio desde el SDK 2.1)
+    ffxCreateContextDescFrameGenerationVersion ver = {};  // (mandatory since SDK 2.1)
     ver.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
     ver.header.pNext = &be.header;
     ver.version = FFX_FRAMEGENERATION_VERSION;
@@ -397,7 +399,7 @@ bool create_fg(VkExtent2D max_render, int version, bool inverted) {
         ov.header.pNext = d.header.pNext, d.header.pNext = &ov.header;
     d.flags = (inverted ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED : 0) |
               (hdr_format(F.sc_fmt) ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0);
-    static int dbg = -1;  // (pruebas) LARECOMP_FG_DEBUG=2: el comprobador de entradas de AMD, con sus avisos al registro
+    static int dbg = -1;  // (tests) LARECOMP_FG_DEBUG=2: AMD's input checker, with its warnings to the log
     if (dbg < 0) dbg = getenv("LARECOMP_FG_DEBUG") ? atoi(getenv("LARECOMP_FG_DEBUG")) : 0;
     if (dbg >= 2) d.flags |= FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
     d.displaySize = {F.sc_ext.width, F.sc_ext.height};
@@ -406,11 +408,11 @@ bool create_fg(VkExtent2D max_render, int version, bool inverted) {
     ffxReturnCode_t r = api_create(&F.fg, &d.header);
     if (r != FFX_API_RETURN_OK) {
         F.fg = nullptr;
-        fail("el contexto de generación", r);
+        fail("the generation context", r);
         return false;
     }
     F.fg_ext = F.sc_ext, F.fg_fmt = F.sc_fmt, F.fg_max = max_render, F.fg_version = version, F.fg_inverted = inverted;
-    {   // (SMRPG) su memoria de vídeo, según AMD, para el medidor del menú (runtime/ui/perf_meter.c)
+    {   // (SMRPG) its video memory, according to AMD, for the menu's meter (runtime/ui/perf_meter.c)
         FfxApiEffectMemoryUsage mu = {};
         ffxQueryDescFrameGenerationGetGPUMemoryUsage q = {};
         q.header.type = FFX_API_QUERY_DESC_TYPE_FRAMEGENERATION_GPU_MEMORY_USAGE;
@@ -424,14 +426,14 @@ bool create_fg(VkExtent2D max_render, int version, bool inverted) {
         gd.fpMessage = amd_message;
         gd.debugLevel = FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE;
         ffxReturnCode_t gr = api_configure(&F.fg, &gd.header);
-        flog("[fg] comprobador de entradas de AMD: %s (%u)", gr == FFX_API_RETURN_OK ? "activo" : "no se pudo activar", (unsigned)gr);
+        flog("[fg] AMD input checker: %s (%u)", gr == FFX_API_RETURN_OK ? "on" : "could not be turned on", (unsigned)gr);
     }
     const char *pv = provider(&F.fg);
     F.fg4 = pv[0] == '4';
-    snprintf(F.status, sizeof F.status, "activa (FSR Frame Generation %s)", pv);
-    flog("[fg] contexto de generación %s para %ux%u%s, escena hasta %ux%u, profundidad %s", pv, F.sc_ext.width,
+    snprintf(F.status, sizeof F.status, "active (FSR Frame Generation %s)", pv);
+    flog("[fg] generation context %s for %ux%u%s, scene up to %ux%u, depth %s", pv, F.sc_ext.width,
          F.sc_ext.height, hdr_format(F.sc_fmt) ? " (HDR)" : "", max_render.width, max_render.height,
-         inverted ? "invertida" : "normal");
+         inverted ? "reversed" : "normal");
     return true;
 }
 
@@ -441,24 +443,25 @@ extern "C" bool vk_fg_dll(void) {
     static int have = -1;
     if (have < 0) {
         have = vk_fsr_available() && exe_file("amd_fidelityfx_framegeneration_vk.dll");
-        if (!have) snprintf(F.status, sizeof F.status, "no disponible (falta amd_fidelityfx_framegeneration_vk.dll junto al programa)");
+        if (!have) snprintf(F.status, sizeof F.status, "not available (amd_fidelityfx_framegeneration_vk.dll is "
+                                                       "missing next to the program)");
     }
     return have;
 }
 
-// Con la DLL, siempre las tres colas: el ajuste puede encenderse durante la partida y una cola quieta no cuesta nada
+// With the DLL, always all three queues: the setting can be turned on while playing and an idle queue costs nothing
 extern "C" uint32_t vk_fg_queue_count(void) { return vk_fg_dll() ? 3 : 1; }
 
 extern "C" void vk_fg_queues(VkQueue game, uint32_t family, VkQueue present, VkQueue acquire) {
     F.game = game, F.family = family, F.present = present, F.acquire = acquire;
     if (vk_fg_dll() && !present)
-        snprintf(F.status, sizeof F.status, "no disponible (la tarjeta no da una segunda cola gráfica)");
+        snprintf(F.status, sizeof F.status, "not available (the GPU has no second graphics queue)");
 }
 
 extern "C" bool vk_fg_usable(void) { return !F.failed && F.present && F.acquire && vk_fg_dll() && api(); }
 
-// La swapchain de AMD está puesta: el VkSwapchainKHR de la ventana es su objeto, y toda llamada de swapchain tiene que
-// ir por sus funciones (también tras un fallo, hasta que device.c la cambie: las de Vulkan nunca deben verlo)
+// AMD's swapchain is in place: the window's VkSwapchainKHR is its object, and every swapchain call has to go through
+// its functions (also after a failure, until device.c swaps it: Vulkan's must never see it)
 extern "C" bool vk_fg_active(void) { return F.sc != nullptr; }
 
 extern "C" bool vk_fg_generating(void) { return vk_fg_active() && !F.failed && F.on.load(std::memory_order_relaxed); }
@@ -466,14 +469,14 @@ extern "C" bool vk_fg_generating(void) { return vk_fg_active() && !F.failed && F
 extern "C" bool vk_fg_rebuild_wanted(void) { return vk_fg_active() && F.rebuild.load(std::memory_order_relaxed) != 0; }
 
 extern "C" VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc) {
-    if (F.sc) {  // la misma swapchain de AMD, hecha de nuevo para el tamaño o el modo nuevos
+    if (F.sc) {  // the same AMD swapchain, made again for the new size or mode
         VkSwapchainKHR obj = F.pending ? F.pending : F.cur;
         F.pending = VK_NULL_HANDLE, F.cur = obj;
         bool same = ci->imageFormat == F.sc_fmt && ci->imageColorSpace == F.sc_cs;
         if (obj && same && F.acquired == F.presented && !F.failed) {
-            fg_disable(obj);  // (el fotograma siguiente la vuelve a encender)
-            // el contexto de generación es para la pantalla de antes, o no sirve (rebuild): fuera, con la GPU parada
-            // (device.c recreate_swapchain esperó); el próximo fotograma con FSR hace otro
+            fg_disable(obj);  // (the next frame turns it back on)
+            // the generation context is for the previous display, or unusable (rebuild): out, with the GPU idle
+            // (device.c recreate_swapchain waited); the next frame with FSR makes another
             if (F.fg && (F.rebuild || F.fg_ext.width != ci->imageExtent.width || F.fg_ext.height != ci->imageExtent.height))
                 destroy_fg();
             F.rebuild = 0;
@@ -482,18 +485,18 @@ extern "C" VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, V
             if (r == VK_SUCCESS) {
                 F.cur = out, *sc = out;
                 F.sc_ext = ci->imageExtent;
-                flog("[fg] swapchain de AMD rehecha a %ux%u", ci->imageExtent.width, ci->imageExtent.height);
+                flog("[fg] AMD swapchain resized to %ux%u", ci->imageExtent.width, ci->imageExtent.height);
                 return VK_SUCCESS;
             }
-            flog("[fg] la swapchain de AMD no se pudo rehacer a %ux%u (%d): se hace de nuevo", ci->imageExtent.width,
+            flog("[fg] AMD's swapchain could not be resized to %ux%u (%d): making a new one", ci->imageExtent.width,
                  ci->imageExtent.height, (int)r);
         } else if (obj && F.acquired != F.presented) {
-            // sus cuentas quedarían una imagen desfasadas para siempre (cada imagen presentada un fotograma tarde)
-            flog("[fg] una imagen adquirida de la swapchain de AMD no se presentó: se hace de nuevo");
+            // its counts would stay one image off forever (every image presented one frame late)
+            flog("[fg] an image acquired from AMD's swapchain was never presented: making a new one");
         } else if (obj && !same) {
-            flog("[fg] otro formato o espacio de color: la swapchain de AMD se hace de nuevo");
+            flog("[fg] another format or color space: making a new AMD swapchain");
         }
-        teardown();  // y una nueva abajo, como la primera vez
+        teardown();  // and a new one below, like the first time
     }
     if (!vk_fg_usable()) return VK_ERROR_FEATURE_NOT_PRESENT;
     ffxCreateContextDescFrameGenerationSwapChainVK d = {};
@@ -515,7 +518,7 @@ extern "C" VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, V
     ffxReturnCode_t r = api_create(&F.sc, &d.header);
     if (r != FFX_API_RETURN_OK) {
         F.sc = nullptr;
-        fail("la swapchain de AMD", r);
+        fail("AMD's swapchain", r);
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     {
@@ -529,32 +532,32 @@ extern "C" VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, V
     F.fn.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
     if (api_query(&F.sc, &F.fn.header) != FFX_API_RETURN_OK || !F.fn.pOutQueuePresentKHR || !F.fn.pOutAcquireNextImageKHR ||
         !F.fn.pOutGetSwapchainImagesKHR || !F.fn.pOutCreateSwapchainFFXAPI) {
-        // con el contexto se va la swapchain que hizo (aún no se dio a nadie); el objeto de AMD sobrevive a su contexto
-        // y va por su propia función, si la consulta llegó a darla
+        // the swapchain the context made goes away with it (not handed to anyone yet); AMD's object outlives its
+        // context and goes through its own function, if the query got as far as giving it
         api_destroy(&F.sc);
         if (none && F.fn.pOutDestroySwapchainFFXAPI) F.fn.pOutDestroySwapchainFFXAPI(api()->dev, none, nullptr, nullptr);
         F.cur = VK_NULL_HANDLE;
-        fail("las funciones de la swapchain de AMD", 0);
+        fail("AMD's swapchain functions", 0);
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     *sc = none;
     F.cur = none, F.pending = VK_NULL_HANDLE, F.acquired = 0, F.presented = 0;
     F.sc_fmt = ci->imageFormat, F.sc_cs = ci->imageColorSpace, F.sc_ext = ci->imageExtent;
     F.rebuild = 0;
-    if (!F.fg) snprintf(F.status, sizeof F.status, "lista (empieza con el primer fotograma con FSR)");
+    if (!F.fg) snprintf(F.status, sizeof F.status, "ready (starts with the first FSR frame)");
     const char *e = getenv("LARECOMP_FG_PSHOT");
     P.at = e ? atol(e) : -1;
-    flog("[fg] swapchain de generación de fotogramas de AMD (%s), %ux%u, %u imágenes", provider(&F.sc),
+    flog("[fg] AMD frame generation swapchain (%s), %ux%u, %u images", provider(&F.sc),
          ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount);
     return VK_SUCCESS;
 }
 
 extern "C" void vk_fg_destroy_swapchain(VkSwapchainKHR sc) {
-    if (F.sc && sc) F.pending = sc;  // (se rehace en su sitio en vk_fg_create_swapchain, o se destruye en vk_fg_release)
+    if (F.sc && sc) F.pending = sc;  // (remade in place in vk_fg_create_swapchain, or destroyed in vk_fg_release)
 }
 
-// La de AMD no corrige la cuenta cuando recibe el arreglo (devolvía 8 para 3 imágenes: vistas de imágenes nulas, y el
-// driver caía): primero cuántas hay, luego esas
+// AMD's doesn't correct the count when given the array (it returned 8 for 3 images: views of null images, and the
+// driver crashed): first how many there are, then those
 extern "C" VkResult vk_fg_get_images(VkSwapchainKHR sc, uint32_t *n, VkImage *img) {
     uint32_t have = 0, cap = *n;
     VkResult r = F.fn.pOutGetSwapchainImagesKHR(api()->dev, sc, &have, nullptr);
@@ -568,8 +571,8 @@ extern "C" VkResult vk_fg_get_images(VkSwapchainKHR sc, uint32_t *n, VkImage *im
     return r == VK_INCOMPLETE ? VK_SUCCESS : r;
 }
 
-// Las dos se cuentan devuelvan lo que devuelvan (vk_fg_create_swapchain compara las cuentas): la swapchain de AMD
-// cuenta una adquisición aunque falle su propia entrega, y contar una de más solo cuesta rehacer el objeto.
+// Both are counted whatever they return (vk_fg_create_swapchain compares the counts): AMD's swapchain counts an acquire
+// even if its own submission fails, and counting one too many only costs remaking the object.
 extern "C" VkResult vk_fg_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem, uint32_t *idx) {
     F.acquired++;
     return F.fn.pOutAcquireNextImageKHR(api()->dev, sc, timeout, sem, VK_NULL_HANDLE, idx);
@@ -579,18 +582,18 @@ extern "C" VkResult vk_fg_present(VkQueue queue, const VkPresentInfoKHR *pi) {
     F.presented++;
     VkResult r = F.fn.pOutQueuePresentKHR(queue, pi);
     F.presents++;
-    if (P.n == 6 && !P.saved && F.presents >= P.saved_at) {  // (pruebas) lo presentado, ya copiado
+    if (P.n == 6 && !P.saved && F.presents >= P.saved_at) {  // (tests) what was presented, already copied
         P.saved = true;
         for (int i = 0; i < 6; i++) {
             char path[64];
-            snprintf(path, sizeof path, "build/fg_pres_%d_%s.png", i, P.gen[i] ? "generado" : "real");
+            snprintf(path, sizeof path, "build/fg_pres_%d_%s.png", i, P.gen[i] ? "generated" : "real");
             shot_save(P.img[i], path);
         }
     }
     if (F.presents == 120 || F.presents % 3600 == 0) {
         uint64_t shown = F.fn.pOutGetLastPresentCountFFXAPI && F.cur ? F.fn.pOutGetLastPresentCountFFXAPI(F.cur) : 0;
-        flog("[fg] %llu fotogramas del juego, %llu generados (%llu con el menú del runtime aparte), %llu presentados en total; "
-             "sin generar: %llu en pausa (menú), %llu sin FSR, %llu sin cámara", (unsigned long long)F.presents,
+        flog("[fg] %llu game frames, %llu generated (%llu with the runtime's menu apart), %llu presented in total; "
+             "not generated: %llu paused (menu), %llu without FSR, %llu without camera", (unsigned long long)F.presents,
              (unsigned long long)F.generated, (unsigned long long)F.hudless, (unsigned long long)shown,
              (unsigned long long)F.paused, (unsigned long long)F.no_inputs, (unsigned long long)F.no_camera);
     }
@@ -605,19 +608,19 @@ static void configure(bool on, const FgPrepare *p) {
     cfg.swapChain = (void *)F.cur;
     cfg.frameGenerationCallback = generate;
     cfg.frameGenerationCallbackUserContext = &F.fg;
-    if (P.at > 0) cfg.presentCallback = present_cb;  // (pruebas: la composición, aquí)
+    if (P.at > 0) cfg.presentCallback = present_cb;  // (tests: the composition, here)
     cfg.frameGenerationEnabled = on;
     cfg.allowAsyncWorkloads = false;
     static int dbg = -1;
     if (dbg < 0) dbg = getenv("LARECOMP_FG_DEBUG") ? atoi(getenv("LARECOMP_FG_DEBUG")) : 0;
     if (dbg == 1) cfg.flags = FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_RESET_INDICATORS;
-    // solo dentro de la imagen del juego: con bandas alrededor, generar en toda la ventana deformaba sus bordes
+    // only inside the game image: with black bars around it, generating over the whole window warped its edges
     if (p && p->pic[2] > 0 && p->pic[3] > 0 && (uint32_t)(p->pic[0] + p->pic[2]) <= F.sc_ext.width &&
         (uint32_t)(p->pic[1] + p->pic[3]) <= F.sc_ext.height)
         cfg.generationRect = {p->pic[0], p->pic[1], p->pic[2], p->pic[3]};
     else
         cfg.generationRect = {0, 0, (int32_t)F.sc_ext.width, (int32_t)F.sc_ext.height};
-    // la ventana sin el menú del runtime: AMD no interpola lo que el menú dibuja encima (el contador de FPS)
+    // the window without the runtime menu: AMD doesn't interpolate what the menu draws on top (the FPS counter)
     if (on && p && p->hudless.image && p->hudless.width == F.sc_ext.width && p->hudless.height == F.sc_ext.height &&
         p->hudless.format == F.sc_fmt) {
         cfg.HUDLessColor = res(&p->hudless);
@@ -626,7 +629,7 @@ static void configure(bool on, const FgPrepare *p) {
     cfg.frameID = F.frame;
     F.configured_at = F.presents;
     ffxReturnCode_t r = api_configure(&F.fg, &cfg.header);
-    if (r != FFX_API_RETURN_OK) fail("la configuración de la generación", r);
+    if (r != FFX_API_RETURN_OK) fail("the generation settings", r);
 }
 
 extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
@@ -634,8 +637,8 @@ extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
     if (!vk_fg_active() || F.failed || !F.cur) return;
     bool have = p->depth.image && p->mv.image && p->render_w && p->render_h && p->render_w <= p->depth.width &&
                 p->render_h <= p->depth.height;
-    // el contexto se hizo para otra versión, otra profundidad o escenas más pequeñas: device.c rehace la swapchain en el
-    // fotograma siguiente (con la GPU parada) y el contexto con ella; hasta entonces, sin generación
+    // the context was made for another version, another depth or smaller scenes: device.c recreates the swapchain on
+    // the next frame (with the GPU idle) and the context with it; until then, no generation
     if (F.fg && (F.fg_version != p->version || F.fg_inverted != p->depth_inverted || p->depth.width > F.fg_max.width ||
                  p->depth.height > F.fg_max.height)) {
         F.rebuild = 1;
@@ -646,16 +649,17 @@ extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
                          F.sc_ext.height > p->depth.height ? F.sc_ext.height : p->depth.height};
         if (!create_fg(mr, p->version, p->depth_inverted)) return;
     }
-    if (!F.fg) {  // (sin contexto todavía: este fotograma, sin generación)
+    if (!F.fg) {  // (no context yet: no generation this frame)
         F.no_inputs++;
         return;
     }
-    // la cámara: FG 4 la necesita (sin ella, la última buena; antes de la primera, sin generación); 3.1 la aprovecha
+    // the camera: FG 4 needs it (without it, the last good one; before the first one, no generation); 3.1 makes use of
+    // it
     FgCamera cam = p->cam;
     if (cam.ok) F.cam = cam;
     else if (F.cam.ok) cam = F.cam, F.no_camera++;
     else if (F.fg4) have = false, F.no_camera++;
-    if (!cam.ok) {  // (3.1 sin cámara todavía: ejes unitarios, nunca vectores nulos)
+    if (!cam.ok) {  // (3.1 with no camera yet: unit axes, never zero vectors)
         cam = FgCamera{};
         cam.right[0] = cam.up[1] = cam.fwd[2] = 1;
     }
@@ -675,7 +679,7 @@ extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
     d.renderSize = {p->render_w, p->render_h};
     d.jitterOffset = {p->jitter_x, p->jitter_y};
     d.motionVectorScale = {p->mv_scale_x, p->mv_scale_y};
-    {   // (pruebas) LARECOMP_FG_MV="x,y": multiplicadores de la escala de los vectores, solo para la generación
+    {   // (tests) LARECOMP_FG_MV="x,y": multipliers for the motion vector scale, for generation only
         static float mx = 0, my = 0;
         static int read;
         if (!read++) {
@@ -689,7 +693,7 @@ extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
     d.cameraNear = cam.ok && cam.znear > 0 ? cam.znear : 0.3f;
     d.cameraFar = cam.ok && cam.zfar > d.cameraNear ? cam.zfar : 1000.0f;
     d.cameraFovAngleVertical = cam.ok && cam.fov_y > 0.01f && cam.fov_y < 3.0f ? cam.fov_y : 0.6f;
-    d.viewSpaceToMetersFactor = 1.0f;  // (Unity: metros)
+    d.viewSpaceToMetersFactor = 1.0f;  // (Unity: meters)
     d.depth = res(&p->depth);
     d.motionVectors = res(&p->mv);
     for (int i = 0; i < 3; i++)
@@ -697,15 +701,15 @@ extern "C" void vk_fg_prepare_record(VkCommandBuffer cb, const void *data) {
     full_barrier(cb);
     ffxReturnCode_t r = api_dispatch(&F.fg, &d.header);
     full_barrier(cb);
-    if (r != FFX_API_RETURN_OK) fail("la preparación de la generación", r);
+    if (r != FFX_API_RETURN_OK) fail("the generation setup", r);
 }
 
-// Antes de entregar la ventana: un fotograma que no llegó a FSR (sin la pasada de movimiento) se configura sin
-// generación, para que la swapchain no genere con lo de otro fotograma
+// Before the window is submitted: a frame that didn't reach FSR (without the motion pass) is configured without
+// generation, so the swapchain doesn't generate from another frame's data
 extern "C" void vk_fg_frame_end_record(VkCommandBuffer cb, const void *unused) {
     (void)cb, (void)unused;
     if (!vk_fg_active() || F.failed || !F.cur || !F.fg) return;
-    if (F.configured_at == F.presents) return;  // (configurado en su FSR)
+    if (F.configured_at == F.presents) return;  // (configured at its FSR pass)
     F.no_inputs++;
     configure(false, nullptr);
 }
@@ -731,5 +735,5 @@ extern "C" void vk_fg_release(void) {
 
 extern "C" const char *vk_fg_status(void) {
     if (!F.status[0]) vk_fg_dll();
-    return F.status[0] ? F.status : "sin usar todavía";
+    return F.status[0] ? F.status : "not used yet";
 }

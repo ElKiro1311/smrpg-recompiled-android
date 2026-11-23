@@ -1,11 +1,9 @@
 # Save file format (`savedataN.bin`)
 
-> **SMRPG Recomp:** este documento es el de LASRecomp (Link's Awakening), tal cual, como referencia. En este
-> port, los fallos van a las [issues de este repositorio](https://github.com/ElKiro1311/smrpg-recompiled/issues)
-> (nunca a peiikai/LASRecomp ni a su Discord); se trabaja sobre `main` (PC) o `android`; no hay ramas `beta_<n>`,
-> ni aleatorizador, ni `make dist`, y el ejecutable es `smrpg-recomp.exe`. Cómo instalar y compilar: README.md y
-> LEEME.md. *(English: this is LASRecomp's document, kept as reference; report SMRPG Recomp issues here, not
-> upstream.)*
+> **SMRPG Recomp:** this is LASRecomp's own document (Link's Awakening), kept as it is for reference. In this port, bugs
+> go to [this repository's issues](https://github.com/ElKiro1311/smrpg-recompiled-android/issues) (never to peiikai/LASRecomp or its
+> Discord); work happens on `main`; there are no `beta_<n>` branches, no randomizer and no `make dist`, and the executable
+> is `libmain.so`, inside the APK. How to install and build: README.md.
 
 The layout of one save slot, mapped on game version 1.0.0. As far as we know 1.0.1 and 1.1.0 use the same layout
 (1.0.1 changed one function in the save loader, not the format). Code addresses are v1.0.0 offsets in the `main` module (`main+0x...`). For other versions, look them up in `runtime/game_addresses/`. Our

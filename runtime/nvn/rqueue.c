@@ -241,7 +241,7 @@ static uint64_t enqueue(const Item *it, const uint64_t *fences, int nfences) {
 
 static void *run(void *arg) {
     (void)arg;
-    plat_thread_name("rqueue");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("rqueue");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     plat_thread_guest(44);  // (the game's GPU thread's class: performance cores on a Mac)
     plat_thread_perf_core(PLAT_PERF_RENDER);
     is_render = true;

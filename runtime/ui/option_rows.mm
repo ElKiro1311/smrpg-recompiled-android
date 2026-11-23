@@ -17,6 +17,7 @@ extern "C" {
 #include <float.h>
 #include <string.h>
 #include "osk.h"
+#include "tr.h"
 
 static float g_scale = 1;
 static std::string g_desc_hover, g_desc_focus, g_desc_shown;  // this frame's hovered / selected row, and the last shown
@@ -29,10 +30,10 @@ static bool g_next_mark, g_next_warn;
 void opt_mark_next(void) { g_next_mark = true; }
 void opt_warn_next(void) { g_next_warn = true; }
 static bool test_press(const char *label);
-// (SMRPG) El recuadro de la descripción con más cosas (la página de vídeo): una cabecera fija arriba (el medidor), la
-// descripción, el impacto de la fila elegida en CPU, GPU, RAM, disco y memoria de vídeo (semáforo y cifras) justo encima
-// de un pie fijo abajo (los botones de la página). opt_begin los olvida: cada página los pide en cada imagen.
-ImU32 opt_level_colour(int l) {  // (el semáforo)
+// (SMRPG) The description pane with more things in it (the video page): a fixed header at the top (the meter), the
+// description, the impact of the selected row on CPU, GPU, RAM, disk and video memory (traffic light and figures) right
+// above a fixed footer at the bottom (the page's buttons). opt_begin forgets them: each page asks for them every frame.
+ImU32 opt_level_colour(int l) {  // (the traffic light)
     return l <= 0 ? IM_COL32(88, 204, 112, 255) : l == 1 ? IM_COL32(244, 200, 66, 255) : IM_COL32(238, 86, 72, 255);
 }
 struct RowImpact {
@@ -41,7 +42,7 @@ struct RowImpact {
     std::string val[5], detail, name;
 };
 static RowImpact g_imp_next, g_imp_hover, g_imp_focus, g_imp_shown;
-static bool g_imp_hover_set, g_imp_focus_set;  // (esta imagen: el ratón / el cursor sobre una fila)
+static bool g_imp_hover_set, g_imp_focus_set;  // (this frame: the mouse / the cursor over a row)
 void opt_impact_next(const signed char lv[5], const char *const val[5], const char *detail) {
     g_imp_next.on = true;
     for (int i = 0; i < 5; i++) g_imp_next.lv[i] = lv[i], g_imp_next.val[i] = val[i] ? val[i] : "";
@@ -52,8 +53,8 @@ static void *g_head_data, *g_foot_data;
 static float g_foot_h;
 void opt_pane_header(OptPaneFn fn, void *data) { g_head_fn = fn, g_head_data = data; }
 void opt_pane_footer(OptPaneFn fn, void *data, float height) { g_foot_fn = fn, g_foot_data = data, g_foot_h = height; }
-// los botones del pie: su descripción (la imagen siguiente, en el recuadro), el primero (Abajo desde la última fila de la
-// lista lo elige) y si el cursor está en uno (Arriba vuelve a la lista)
+// the footer's buttons: their description (the next frame, in the pane), the first one (Down from the list's last row
+// selects it) and whether the cursor is on one (Up goes back to the list)
 static std::string g_foot_desc_hover, g_foot_desc_focus, g_foot_hover_prev, g_foot_focus_prev;
 static bool g_foot_focused, g_foot_focused_prev, g_foot_take, g_foot_first_done;
 static ImGuiID g_foot_first_prev;
@@ -124,12 +125,12 @@ void opt_begin(const char *id, float scale) {
     g_desc_first.clear();
     g_ids.clear();
     g_pane = 0;
-    static std::string last_page;  // (otra página: la descripción de la anterior no se queda - salía la de Controles en
-    if (last_page != id) last_page = id, g_desc_shown.clear(), g_imp_shown = RowImpact();  // Vídeo, Audio y Salir)
+    static std::string last_page;  // (another page: the last one's description does not stay - Controls' showed up in
+    if (last_page != id) last_page = id, g_desc_shown.clear(), g_imp_shown = RowImpact();  // Video, Audio and Quit)
 }
 
-// (SMRPG) Mayúsculas también para las letras con tilde del español (á é í ó ú ñ ü...: U+00E0-U+00FE, en UTF-8 0xC3
-// 0xA0-0xBE, a 0xC3 0x80-0x9E; toupper solo cambiaba el ASCII: «VIBRACIóN»)
+// (SMRPG) Uppercase for Spanish accented letters too (á é í ó ú ñ ü...: U+00E0-U+00FE, in UTF-8 0xC3 0xA0-0xBE, to 0xC3
+// 0x80-0x9E; toupper only changed ASCII: "VIBRACIóN")
 static std::string upper_utf8(const char *s) {
     std::string t = s;
     for (size_t i = 0; i < t.size(); i++) {
@@ -142,16 +143,15 @@ static std::string upper_utf8(const char *s) {
     }
     return t;
 }
-extern "C" bool g_game_las;  // (SMRPG: los textos de los interruptores en español)
 
 void opt_section(const char *title) {
-    std::string t = upper_utf8(title);
+    std::string t = upper_utf8(tr(title));
     if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y + 1) ImGui::Dummy(ImVec2(0, 10 * g_scale));
     ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.52f, 1), "%s", t.c_str());
 }
 
-// (pruebas) LARECOMP_MENU_PRESS=<imagen>:<etiqueta>,...: pulsa la fila con esa etiqueta (la primera vez que se dibuja
-// desde esa imagen presentada), una por entrada y en orden: para probar los botones sin navegar
+// (tests) LARECOMP_MENU_PRESS=<frame>:<label>,...: presses the row with that label (the first time it is drawn from
+// that presented frame on), one per entry and in order: to test the buttons without navigating
 extern "C" uint64_t renderer_present_count(void);
 static bool test_press(const char *label) {
     struct Press { unsigned long at; std::string label; };
@@ -172,8 +172,8 @@ static bool test_press(const char *label) {
             }
         }
     }
-    if (q.empty() || renderer_present_count() < q.front().at || q.front().label != label) return false;
-    fprintf(stderr, "[menu] prueba: pulsada «%s» en la imagen %llu\n", label, (unsigned long long)renderer_present_count());
+    if (q.empty() || renderer_present_count() < q.front().at || (q.front().label != label && q.front().label != tr(label))) return false;
+    fprintf(stderr, "[menu] test: pressed \"%s\" on frame %llu\n", label, (unsigned long long)renderer_present_count());
     q.erase(q.begin());
     return true;
 }
@@ -186,6 +186,8 @@ static int row(const char *label, const std::string &value, bool changed, const 
     // a label a row above already has (Save Editor: Bombs, Magic Powder under Equipment and Ammo) gets an id of its
     // own: two rows with one id share the controller's cursor - ImGui kept the later one's place, so Up / Down from
     // the first went on from the second (a row far below, or the edge of the view)
+    const char *shown = tr(label);
+    desc = tr(desc);
     int dup = g_ids[ImGui::GetID(label)]++;
     ImGui::PushID(label);
     if (dup) ImGui::PushID(dup);
@@ -193,7 +195,7 @@ static int row(const char *label, const std::string &value, bool changed, const 
     ImVec2 p = ImGui::GetCursorScreenPos();
     RowImpact imp = g_imp_next;
     g_imp_next.on = false;
-    imp.name = label;
+    imp.name = shown;
     float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * 1.9f;
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the row's own border shows the selection)
     bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
@@ -247,7 +249,7 @@ static int row(const char *label, const std::string &value, bool changed, const 
     dl->AddRect(p, ImVec2(p.x + w, p.y + h), hov || foc ? (off ? IM_COL32(236, 194, 84, 120) : kGold)
                                              : mark ? IM_COL32(236, 194, 84, 130) : IM_COL32(255, 255, 255, off ? 18 : 38),
                 r, 0, hov || foc || mark ? 2.0f : 1.0f);
-    std::string t = upper ? upper_utf8(label) : std::string(label);
+    std::string t = upper ? upper_utf8(shown) : std::string(shown);
     float ty = p.y + (h - fs) * 0.5f;
     ImU32 label_col = off ? IM_COL32(110, 110, 102, 255) : IM_COL32(240, 236, 224, 255);  // (greyed out: clearly dim)
     dl->AddText(ImVec2(p.x + pad, ty), label_col, t.c_str());
@@ -284,14 +286,14 @@ static int row(const char *label, const std::string &value, bool changed, const 
 }
 
 bool opt_toggle(const char *label, bool *v, bool def, const char *desc) {
-    if (!row(label, *v ? (g_game_las ? "On" : "Sí") : (g_game_las ? "Off" : "No"), *v != def, desc)) return false;  // (any step flips it)
+    if (!row(label, tr(*v ? "On" : "Off"), *v != def, desc)) return false;  // (any step flips it)
     *v = !*v;
     return true;
 }
 
 bool opt_choice(const char *label, int *v, const char *const *names, int n, int def, const char *desc, bool wrap) {
     int cur = *v >= 0 && *v < n ? *v : 0;
-    int step = row(label, names[cur], cur != def, desc, true, true);
+    int step = row(label, tr(names[cur]), cur != def, desc, true, true);
     if (!step) return false;
     int nv = cur + (step == 2 ? 1 : step);
     nv = wrap ? (nv + n) % n : nv < 0 ? 0 : nv >= n ? n - 1 : nv;
@@ -314,7 +316,7 @@ bool opt_slider(const char *label, float *v, float lo, float hi, float step, flo
 bool opt_int(const char *label, int *v, int lo, int hi, int step, int def, const char *fmt, const char *desc,
              const char *lo_name) {
     char buf[48];
-    if (lo_name && *v == lo) snprintf(buf, sizeof buf, "%s", lo_name);
+    if (lo_name && *v == lo) snprintf(buf, sizeof buf, "%s", tr(lo_name));
     else snprintf(buf, sizeof buf, fmt, *v);
     int s = row(label, buf, *v != def, desc, true, true);
     if (!s) return false;
@@ -342,7 +344,7 @@ bool opt_radio(const char *label, bool selected, const char *desc) {
 }
 
 bool opt_action(const char *label, const char *value, const char *desc, bool upper, bool changed) {
-    return row(label, value ? value : "", changed, desc, upper) == 2;
+    return row(label, value ? tr(value) : "", changed, desc, upper) == 2;
 }
 
 bool opt_colour(const char *label, CosColour *c, int slot, const char *desc) {
@@ -456,12 +458,13 @@ void opt_desc_text(void) {
     ImGui::SetWindowFontScale(1.0f);
 }
 
-// (SMRPG) el impacto de la fila elegida: su nombre, los cinco semáforos con lo que gasta en cada uno y el porqué
+// (SMRPG) the impact of the selected row: its name, the five traffic lights with what it uses of each one and the
+// reason
 static float impact_block(bool draw) {
     const RowImpact &m = g_imp_shown;
     float w = ImGui::GetContentRegionAvail().x, fs = ImGui::GetFontSize(), y0 = ImGui::GetCursorPosY();
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    std::string title = "IMPACTO: " + upper_utf8(m.name.c_str());
+    std::string title = tr("IMPACT: ") + upper_utf8(m.name.c_str());
     float th = fs * 0.85f;
     if (draw) {
         ImVec2 p = ImGui::GetCursorScreenPos();
@@ -473,7 +476,7 @@ static float impact_block(bool draw) {
     float cw = w / 5, ls = fs * 0.8f, rr = fs * 0.24f;
     if (draw) {
         ImVec2 o = ImGui::GetCursorScreenPos();
-        float oy = o.y - ImGui::GetCursorPosY();  // (de la posición en la ventana a la de la pantalla)
+        float oy = o.y - ImGui::GetCursorPosY();  // (from the position in the window to the one on the screen)
         for (int i = 0; i < 5; i++) {
             float x = o.x + cw * i;
             dl->AddCircleFilled(ImVec2(x + rr, oy + y + ls * 0.55f), rr, opt_level_colour(m.lv[i]));
@@ -519,9 +522,10 @@ void opt_end(void) {
     ImGui::PopID();
 }
 
-// (SMRPG) un botón del pie del recuadro: compacto, con su descripción en el recuadro mientras el ratón o el cursor están
-// en él; el primero de la página toma el cursor si se pidió (Abajo desde la última fila: opt_nav_step)
+// (SMRPG) a button in the pane's footer: compact, with its description in the pane while the mouse or the cursor is on
+// it; the page's first one takes the cursor if requested (Down from the last row: opt_nav_step)
 bool opt_pane_button(const char *id, const char *label, const char *desc, float w, bool marked, bool disabled) {
+    label = tr(label), desc = tr(desc);
     float fs = ImGui::GetFontSize(), h = fs * 1.75f;
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();

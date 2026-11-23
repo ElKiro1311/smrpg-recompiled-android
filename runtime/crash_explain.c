@@ -17,8 +17,8 @@ static uint64_t g_pc;      // a crash's host pc (0: a FATAL)
 int rt_romfs_files = -1;   // the game's own RomFS files (runtime/services/fs.c; -1: not read yet)
 uint64_t rt_romfs_bytes;   // their sizes summed (issue #391: one damaged file, every file there)
 int rt_romfs_missing;      // the game's files not found by name and size (#391: a renamed file keeps count and bytes)
-// (SMRPG: la RomFS de Super Mario RPG 1.0.0 tiene 1934 archivos —contados por el instalador—; los 3836 eran los de
-// Link's Awakening, y con ellos cualquier fallo se explicaba como «faltan archivos del juego»)
+// (SMRPG: the RomFS of Super Mario RPG 1.0.0 has 1934 files, counted by the installer; the 3836 were Link's
+// Awakening's, and with them any crash was explained as "game files are missing")
 enum { ROMFS_FILES = 1934 };
 
 void rt_fatal_msg(const char *fmt, ...) {

@@ -26,17 +26,17 @@ static inline void __attribute__((format(printf, 1, 2))) rt_log(const char *fmt,
 #define FATAL(...) (rt_fatal_msg(__VA_ARGS__), rt_fatal_trace())  // (runtime/crash_explain.c keeps the line)
 
 // ---- address space layout (guest addresses == host addresses)
-// macOS reserves 0x2_0000_0000-0x70_0000_0000, and guest addresses must fit in 39 bits, so the
-// guest lives in a window at 0x70_0000_0000 claimed at startup (see main.c).
-// SMRPG: la ventana llega al límite de 39 bits (64 GB, solo reservados: las páginas sin tocar no cuestan nada) para
-// que quepa una región alias grande (ver ALIAS_BASE).
+// macOS reserves 0x2_0000_0000-0x70_0000_0000, and guest addresses must fit in 39 bits, so the guest lives in a window
+// at 0x70_0000_0000 claimed at startup (see main.c).
+// SMRPG: the window reaches the 39-bit limit (64 GB, only reserved: untouched pages cost nothing) so that a large alias
+// region fits (see ALIAS_BASE).
 #include "guest_addr.h"  // (SMRPG Android: GADDR, GUEST_SHIFT)
 #define GUEST_LO     GADDR(0x7000000000ull)
 #define GUEST_HI     GADDR(0x8000000000ull)
 #define MAIN_BASE    GADDR(0x7000000000ull)
-// SMRPG: el sdk va después de main, como lo carga el rtld de la Switch (cada módulo tras el anterior). En 0x7004000000
-// (la base de Link's Awakening, cuyo main es pequeño) quedaba DENTRO de main: el main de SMRPG ocupa 0x4dbc000 bytes
-// con su .bss, hasta 0x7004dbc000, y las globales del final de su .bss se solapaban con el código y los datos del sdk.
+// SMRPG: the sdk goes after main, as the Switch's rtld loads it (each module after the previous one). At 0x7004000000
+// (the base for Link's Awakening, whose main is small) it ended up INSIDE main: SMRPG's main takes 0x4dbc000 bytes with
+// its .bss, up to 0x7004dbc000, and the globals at the end of its .bss overlapped the sdk's code and data.
 #define SDK_BASE     GADDR(0x7005000000ull)
 #define HLE_BASE     GADDR(0x7080000000ull)   // fake addresses for host-implemented functions
 #define HLE_SIZE     0x0000100000ull
@@ -44,11 +44,11 @@ static inline void __attribute__((format(printf, 1, 2))) rt_log(const char *fmt,
 #define TLS_SIZE     0x0000100000ull
 #define HLE_HEAP     GADDR(0x7092000000ull)   // guest-visible memory owned by host code
 #define HLE_HEAP_SIZE 0x000E000000ull
-// Región alias (GetInfo 2/3). El NPDM de SMRPG declara «system resource», así que el VammManager de nn::os monta su
-// AddressRegionManager sobre esta región: el gestor se queda el primer GB, alinea a 1 GB lo que pida 1 GB o más, y el
-// nninitStartup del juego pide (total - usada) = ~3,1 GB de espacio virtual para su StandardAllocator; después Unity
-// reserva más. En la Switch (39 bits) la región es de 64 GB. Con 4 GB quedaban ~3 GB útiles y el juego abortaba
-// (2162-0001). Aquí: 48 GB, alineada a 1 GB, hasta GUEST_HI.
+// Alias region (GetInfo 2/3). SMRPG's NPDM declares a "system resource", so nn::os's VammManager sets up its
+// AddressRegionManager on this region: the manager keeps the first GB, aligns to 1 GB whatever asks for 1 GB or more,
+// and the game's nninitStartup asks for (total - used) = ~3.1 GB of virtual space for its StandardAllocator; after that
+// Unity reserves more. On the Switch (39 bits) the region is 64 GB. With 4 GB, ~3 GB were left usable and the game
+// aborted (2162-0001). Here: 48 GB, aligned to 1 GB, up to GUEST_HI.
 #define ALIAS_BASE   GADDR(0x7400000000ull)
 #define ALIAS_SIZE   0x0C00000000ull
 #define HEAP_BASE    GADDR(0x7240000000ull)

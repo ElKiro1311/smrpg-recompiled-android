@@ -1,7 +1,7 @@
-# tools/shader_pick.py: saca de los paquetes de shaders (los de nxnative dm/gfx/tools/shader_split.py) los registros de
-# las claves que fallan en un barrido (las líneas "[fallo] <paquete> <clave>: ..." de tools/shader_sweep.c) y los
-# escribe en otra carpeta con el mismo formato, para repetir solo esos (con LARECOMP_LOG_BINDLESS=1, por ejemplo).
-# Uso: python tools/shader_pick.py <carpeta de paquetes> <errores del barrido> <carpeta de salida> [texto del motivo]
+# tools/shader_pick.py: takes from the shader bundles (the ones of nxnative's dm/gfx/tools/shader_split.py) the records of
+# the keys that fail in a sweep (the "[fail] <bundle> <key>: ..." lines of tools/shader_sweep.c) and writes them to another
+# folder in the same format, to repeat only those (with LARECOMP_LOG_BINDLESS=1, for example).
+# Usage: python tools/shader_pick.py <bundle folder> <sweep errors> <output folder> [reason text]
 import os
 import re
 import struct
@@ -13,7 +13,7 @@ def main():
     want_why = sys.argv[4] if len(sys.argv) > 4 else ''
     want = {}
     for line in open(err, encoding='utf-8', errors='replace'):
-        m = re.match(r'\[fallo\] (\S+) ([0-9a-f]{16}): (.*)', line)
+        m = re.match(r'\[fail\] (\S+) ([0-9a-f]{16}): (.*)', line)
         if m and want_why in m.group(3):
             want.setdefault(m.group(1), set()).add(m.group(2))
     os.makedirs(out, exist_ok=True)

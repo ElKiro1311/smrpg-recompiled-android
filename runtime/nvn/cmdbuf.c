@@ -114,9 +114,10 @@ static CmdRec *record_copy(Cpu *c, uint32_t op, int arg, uint32_t len) {
 
 // ---- state binding
 NVN(nvnCommandBufferBindProgram) {
-    // SMRPG: BindProgram(NULL, etapas) desvincula esas etapas (Unity lo hace con 0x3c: geometría, teselación y cómputo,
-    // tras vincular un programa de vértices y fragmentos). HOST() leía el objeto nulo (dirección 0). Aquí el estado es un
-    // solo programa: sin vértices ni fragmentos en la máscara no hay nada que quitar; con ellos, se queda sin programa.
+    // SMRPG: BindProgram(NULL, stages) unbinds those stages (Unity does it with 0x3c: geometry, tessellation and
+    // compute, after binding a vertex and fragment program). HOST() was reading the null object (address 0). Here the
+    // state is a single program: with neither vertex nor fragment in the mask there is nothing to unbind; with them, it
+    // is left with no program.
     if (!A(1)) {
         if (!(A(2) & 3)) return;
         Snap s = snap(c);
@@ -175,10 +176,10 @@ NVN(nvnCommandBufferBindImage) {
     r->x[0] = s.x[1]; r->x[1] = s.x[2]; r->x[2] = 1;
     memcpy(r->extra, &s.x[3], 8);
 }
-// SMRPG: texturas y samplers separados, cada uno en su tabla (en el driver de la Switch, c[2] 0x168 + 8r y
-// 0x568 + 8r, 128 ranuras cada una). Unity muestrea con TEX.B: el shader une con OR la palabra de la textura y la del
-// sampler (maxwell/translate.c). Antes las texturas separadas iban a la tabla de las combinadas y los samplers
-// separados se ignoraban.
+// SMRPG: separate textures and samplers, each in its own table (in the Switch driver, c[2] 0x168 + 8r and 0x568 + 8r,
+// 128 slots each). Unity samples with TEX.B: the shader ORs the texture word and the sampler word together
+// (maxwell/translate.c). Before, separate textures went into the table of the combined ones and separate samplers were
+// ignored.
 NVN(nvnCommandBufferBindSeparateTextures) { record_copy(c, CMD_BIND_SEP_TEXTURES, 4, (uint32_t)A(3) * 8); }
 NVN(nvnCommandBufferBindSeparateTexture) {
     Snap s = snap(c);

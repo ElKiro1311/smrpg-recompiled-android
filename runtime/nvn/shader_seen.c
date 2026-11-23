@@ -122,15 +122,15 @@ static bool known_loaded;
 static size_t file_n;   // records in the file
 static uint64_t game_id;  // (shader_seen_prep_done; 0: not known yet)
 
-// (SMRPG) las copias del código esperando al hilo que escribe (shader_code_note; q_lock): cache/shader_code/<huella>.bin
-// = cabecera de 16 bytes (CODE_MAGIC, bytes, desplazamiento y tamaño de las constantes) + los bytes que dan la huella
+// (SMRPG) the code copies waiting for the writer thread (shader_code_note; q_lock): cache/shader_code/<hash>.bin =
+// 16-byte header (CODE_MAGIC, bytes, offset and size of the constants) + the hashed bytes
 typedef struct { uint64_t h; uint32_t coff, csize; uint8_t *d; } CodeJob;
 static CodeJob *c_tab;
 static size_t c_n, c_cap;
-static HSet c_seen;  // las huellas que este proceso ya anotó
+static HSet c_seen;  // the hashes this process has already noted
 #define CODE_DIR "cache/shader_code"
 #define CODE_MAGIC 0x31445343u  // "CSD1"
-#define CODE_MAX (4u << 20)     // (más que cualquier sombreador: un límite para la copia)
+#define CODE_MAX (4u << 20)     // (more than any shader: a limit for the copy)
 
 static void known_load(void) {  // (f_lock held)
     if (known_loaded) return;
@@ -173,7 +173,7 @@ static void write_batch(void) {  // (f_lock held) everything queued -> the file
     if (f) fclose(f);
 }
 
-static void write_code(void) {  // (f_lock held) las copias del código en cola -> sus archivos (los que no están)
+static void write_code(void) {  // (f_lock held) the queued code copies -> their files (the missing ones)
     pthread_mutex_lock(&q_lock);
     CodeJob *tab = c_tab;
     size_t n = c_n;
@@ -201,7 +201,7 @@ static void write_code(void) {  // (f_lock held) las copias del código en cola 
 }
 
 static void *writer(void *arg) {
-    plat_thread_name("seen-writer");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("seen-writer");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -279,7 +279,7 @@ void shader_seen_prep_done(uint64_t game, const char *keep) {
     pthread_mutex_unlock(&f_lock);
 }
 
-// ------------------------------------------------------------------ (SMRPG) la copia propia del código (shader_prep.h)
+// ------------------------------------------------------------------ (SMRPG) our own copy of the code (shader_prep.h)
 void shader_code_note(uint64_t h, const struct NvnShaderStage *s) {
     if (!h || !s || !s->code_addr || !s->const_offset || !shader_seen_on()) return;
     uint32_t len = s->const_offset + s->const_size;
@@ -291,7 +291,7 @@ void shader_code_note(uint64_t h, const struct NvnShaderStage *s) {
     uint8_t *d = malloc(len);
     if (!d) return;
     memcpy(d, (const void *)(uintptr_t)s->code_addr, len);
-    if (shader_code_hash(d, len) != h) { free(d); return; }  // (no es el código de esa huella: no se guarda)
+    if (shader_code_hash(d, len) != h) { free(d); return; }  // (not the code of that hash: not saved)
     pthread_mutex_lock(&q_lock);
     if (c_n == c_cap) c_tab = realloc(c_tab, sizeof *c_tab * (c_cap = c_cap ? c_cap * 2 : 64));
     c_tab[c_n++] = (CodeJob){h, s->const_offset, s->const_size, d};

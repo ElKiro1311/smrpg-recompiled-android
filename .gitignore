@@ -19,12 +19,12 @@ venv/
 __pycache__/
 .DS_Store
 
-# ---- port de Super Mario RPG: lo local que no se sube ----
-# las rutas de las herramientas de cada PC (SDK de Android, JDK...: ver local.env.ejemplo)
+# ---- the Super Mario RPG port: local things that are not uploaded ----
+# the paths of each PC's tools (Android SDK, JDK...: see local.env.example)
 /local.env
-# el enlace a la carpeta con el volcado del juego (exefs/romfs)
+# the link to the folder with the extracted game (exefs/romfs)
 /extracted
-# volcados y desensamblados del código del juego, y pruebas sueltas
+# dumps and disassemblies of the game's code, and loose tests
 /plt_calls.txt
 /thunks.txt
 /thunk_bl.txt
@@ -33,16 +33,18 @@ __pycache__/
 /probe_*.py
 /test_ver.c
 /test_ver.exe
-# binarios y ELF convertidos para Ghidra (son código del juego)
+# binaries and ELFs converted for Ghidra (they are game code)
 *.elf
 *.nso
 realesrgan/
 
-# ---- red de seguridad: nada del juego, ni llaves, ni programas de pago, ni rutas de nadie ----
-# (las texturas que vuelca el juego, y sus versiones HD, son del juego)
+# ---- safety net: nothing of the game, no keys, no paid programs, nobody's paths ----
+# (the textures the game dumps, and their HD versions, belong to the game)
+/textures/
+/textures-dump/
 /texturas/
 /texturas-volcadas/
-# copias del juego y llaves de consola
+# copies of the game and console keys
 *.xci
 *.xcz
 *.nsp
@@ -50,16 +52,16 @@ realesrgan/
 *.nca
 *.tik
 *.keys
-# salidas de Il2CppDumper y de Ghidra (sacadas del código del juego)
+# output of Il2CppDumper and Ghidra (taken from the game's code)
 dump.cs
 script.json
 il2cpp.h
 stringliteral.json
 *.gzf
-# programas de pago o con su propia licencia de redistribución (van aparte: ver third_party/amd-fsr/LEEME.txt)
+# paid programs, or with their own redistribution license (they go apart: see third_party/amd-fsr/README.txt)
 Lossless*.dll
 amd_fidelityfx_*.dll
-# registros y pruebas
+# logs and tests
 /lasrecomp*.log
 /tools/android/lsfg-thor/
 /tools/android/partida-prueba-*/

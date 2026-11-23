@@ -1,26 +1,26 @@
 #!/bin/bash
-# tools/android/deps.sh <abi> [jobs]: las dependencias del programa para Android, compiladas con el NDK, en
-# deps/<abi>/ (include/ y lib/), junto a la carpeta del repositorio. <abi>: x86_64 (el emulador) o arm64-v8a (los
-# móviles). En MSYS2 UCRT64 (Windows), con el SDK de Android de tools/android (ANDROID_SDK; NDK 29, su CMake y Ninja):
-#   - SDL3 3.4.20 (la del port de PC; libSDL3.so y, de su android-project, el Java que la arranca),
-#   - FFmpeg 9.0.2 (libavcodec/avformat/avutil/swscale.so, LGPL; los decodificadores que usan los vídeos del juego,
-#     como tools/build_deps_windows.sh),
-#   - Opus (estática: hwopus),
-#   - shaderc (estática: el GLSL de los shaders traducidos a SPIR-V; la del NDK, sources/third_party/shaderc).
-# Lo ya hecho se salta (borrar deps/<abi>/.<paso> para rehacerlo). Las descargas se comprueban por su sha256.
+# tools/android/deps.sh <abi> [jobs]: the program's dependencies for Android, built with the NDK, in deps/<abi>/ (include/ and
+# lib/), next to the repository's folder. <abi>: x86_64 (the emulator) or arm64-v8a (phones). In MSYS2 UCRT64 (Windows), with
+# the Android SDK (ANDROID_SDK; NDK 29, its CMake and Ninja):
+#   - SDL3 3.4.20 (the PC port's; libSDL3.so and, from its android-project, the Java that starts it),
+#   - FFmpeg 9.0.2 (libavcodec/avformat/avutil/swscale.so, LGPL; the decoders the game's movies use, as
+#     tools/build_deps_windows.sh),
+#   - Opus (static: hwopus),
+#   - shaderc (static: the GLSL of the translated shaders to SPIR-V).
+# What is already done is skipped (delete deps/<abi>/.<step> to do it again). Downloads are checked by their sha256.
 set -euo pipefail
-ABI=${1:?uso: deps.sh x86_64|arm64-v8a [hilos]}
+ABI=${1:?usage: deps.sh x86_64|arm64-v8a [jobs]}
 JOBS=${2:-$(nproc)}
 case $ABI in
     x86_64) TRIPLE=x86_64-linux-android FFARCH=x86_64 ;;
     arm64-v8a) TRIPLE=aarch64-linux-android FFARCH=aarch64 ;;
-    *) echo "ABI desconocida: $ABI"; exit 2 ;;
+    *) echo "unknown ABI: $ABI"; exit 2 ;;
 esac
 API=33
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 . "$HERE/tools/local_env.sh"
-SDK=${ANDROID_SDK:?falta el SDK de Android: pon ANDROID_SDK en local.env (ver local.env.ejemplo) o en el entorno}
+SDK=${ANDROID_SDK:?the Android SDK is missing: put ANDROID_SDK in local.env (see local.env.example) or in the environment}
 NDK=$(cygpath -m "${NDK:-$SDK/ndk/29.0.14206865}")
 TC=$NDK/toolchains/llvm/prebuilt/windows-x86_64
 CMAKE=$SDK/cmake/4.1.2/bin/cmake.exe
@@ -66,7 +66,7 @@ fi
 # ---- Opus
 if ! done_step opus; then
     fetch https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz \
-        6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1 opus-1.6.1.tar.gz  # (SHA256SUMS.txt de xiph.org)
+        6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1 opus-1.6.1.tar.gz  # (SHA256SUMS.txt from xiph.org)
     [ -d "$SRC/opus-1.6.1" ] || tar -xzf "$SRC/opus-1.6.1.tar.gz" -C "$SRC"
     cmake_android "$SRC/opus-1.6.1" "$B/opus" -DOPUS_BUILD_SHARED_LIBRARY=OFF -DOPUS_BUILD_TESTING=OFF \
         -DOPUS_BUILD_PROGRAMS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
@@ -74,15 +74,15 @@ if ! done_step opus; then
     echo "deps $ABI: Opus"
 fi
 
-# ---- FFmpeg (LGPL, compartida: como en Windows)
+# ---- FFmpeg (LGPL, shared: as on Windows)
 if ! done_step ffmpeg; then
-    FF=${FFMPEG_TAR:-}  # (uno ya descargado, p. ej. el de build/deps-win/src del port de PC; si no, de ffmpeg.org)
+    FF=${FFMPEG_TAR:-}  # (one already downloaded, e.g. the one in build/deps-win/src of the PC port; if not, from ffmpeg.org)
     [ -f "$SRC/ffmpeg-9.0.2.tar.xz" ] || { [ -n "$FF" ] && cp "$FF" "$SRC/"; } 2>/dev/null ||
         curl -fsSL -o "$SRC/ffmpeg-9.0.2.tar.xz" https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
     echo "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e  $SRC/ffmpeg-9.0.2.tar.xz" | sha256sum -c --quiet
-    # (su configure no admite espacios en las rutas —sus temporales, --cc sin comillas—: se compila en un temporal
-    # sin ellos, y las herramientas del NDK van por envoltorios de ahí. El NDK no puede ir delante en el PATH: su
-    # libwinpthread-1.dll rompe el cc1 del gcc anfitrión, que configure también prueba)
+    # (its configure does not take spaces in paths -its temporary files, --cc without quotes-: it is built in a temporary
+    # folder without them, and the NDK's tools go through wrappers there. The NDK cannot be ahead in the PATH: its
+    # libwinpthread-1.dll breaks the cc1 of the host gcc, which configure tries too)
     FB=$(mktemp -d /tmp/smrpg-ffmpeg-XXXXXX)
     tar -xJf "$SRC/ffmpeg-9.0.2.tar.xz" -C "$FB" --strip-components=1
     mkdir -p "$FB/ndk" "$FB/tmp"
@@ -103,18 +103,18 @@ if ! done_step ffmpeg; then
         sed -i "s|$FB|.|g" config.h &&  # (the configuration FFmpeg carries inside, without the paths of this PC)
         make -j"$JOBS" > "$B/ffmpeg.build.log" 2>&1 &&
         make install DESTDIR="$FB/root" > "$B/ffmpeg.install.log" 2>&1) ||
-        { echo "deps $ABI: FFmpeg falló (mira $B/ffmpeg.*.log; compilado en $FB)"; exit 1; }
+        { echo "deps $ABI: FFmpeg failed (see $B/ffmpeg.*.log; built in $FB)"; exit 1; }
     cp -R "$FB/root/ffmpeg/include/." "$P/include/"
     cp "$FB/root/ffmpeg/lib/"*.so "$P/lib/"
-    grep -q 'GPL version 3\|--enable-gpl' "$FB/root/ffmpeg/lib/pkgconfig/libavcodec.pc" && { echo "FFmpeg no es LGPL"; exit 1; }
+    grep -q 'GPL version 3\|--enable-gpl' "$FB/root/ffmpeg/lib/pkgconfig/libavcodec.pc" && { echo "FFmpeg is not LGPL"; exit 1; }
     rm -rf "$FB"
     mark ffmpeg
     echo "deps $ABI: FFmpeg"
 fi
 
-# ---- shaderc 2026.4 (la del port de PC, de MSYS2) con glslang 16.6.0 y SPIRV-Tools / SPIRV-Headers 1.4.363 (las de
-# GitHub, comprobadas por su sha256): la del NDK (abajo, ya sin usar) es antigua y no conoce extensiones que el
-# traductor de shaders declara (GL_EXT_texture_shadow_lod): sin esta, ningún shader compilaba
+# ---- shaderc 2026.4 (the PC port's, from MSYS2) with glslang 16.6.0 and SPIRV-Tools / SPIRV-Headers 1.4.363 (GitHub's,
+# checked by their sha256): the NDK's (below, no longer used) is old and does not know extensions that the shader translator
+# declares (GL_EXT_texture_shadow_lod): without this one, no shader compiled
 if ! done_step shaderc2026; then
     fetch https://github.com/google/shaderc/archive/refs/tags/v2026.4.tar.gz \
         f06ce5bcca94e5df7f34e115743597d0ad2e13c5fe9213c67dc8c76031241947 shaderc-2026.4.tar.gz
@@ -137,24 +137,24 @@ if ! done_step shaderc2026; then
         -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
         -DSPIRV_SKIP_EXECUTABLES=ON -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF \
         -DENABLE_GLSLANG_BINARIES=OFF -DGLSLANG_TESTS=OFF -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF
-    rm -f "$P/lib/libshaderc_shared.so" "$P/lib/libSPIRV-Tools-shared.so"  # (se enlaza la estática, libshaderc_combined.a)
-    [ -f "$P/lib/libshaderc_combined.a" ] || { echo "deps $ABI: shaderc 2026.4 no dejó libshaderc_combined.a"; exit 1; }
+    rm -f "$P/lib/libshaderc_shared.so" "$P/lib/libSPIRV-Tools-shared.so"  # (the static one is linked, libshaderc_combined.a)
+    [ -f "$P/lib/libshaderc_combined.a" ] || { echo "deps $ABI: shaderc 2026.4 left no libshaderc_combined.a"; exit 1; }
     mark shaderc2026
-    mark shaderc  # (la del NDK, de abajo, ya no hace falta)
+    mark shaderc  # (the NDK's, below, is no longer needed)
     echo "deps $ABI: shaderc 2026.4"
 fi
 
-# ---- shaderc (la del NDK: antigua; solo si no se hizo la de arriba)
+# ---- shaderc (the NDK's: old; only if the one above was not built)
 if ! done_step shaderc; then
     [ -d "$SRC/shaderc" ] || cp -R "$NDK/sources/third_party/shaderc" "$SRC/shaderc"
-    # (sus bibliotecas; el paso del NDK que las junta, un guion MRI de llvm-ar, falla en Windows por las comillas:
-    # se juntan aquí con llvm-ar qcL, que mete en un archivo el contenido de los otros)
+    # (its libraries; the NDK's step that joins them, an llvm-ar MRI script, fails on Windows because of the quotes: they are
+    # joined here with llvm-ar qcL, which puts the contents of the others into one archive)
     SC_LIBS="libshaderc libshaderc_util libglslang libOGLCompiler libOSDependent libSPIRV libHLSL libSPIRV-Tools-opt libSPIRV-Tools"
     (cd "$SRC/shaderc" && /c/Windows/System32/cmd.exe //c "$(cygpath -w "$NDK/ndk-build.cmd")" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk \
         APP_STL=c++_static APP_ABI=$ABI APP_PLATFORM=android-$API NDK_OUT=obj NDK_LIBS_OUT=libs \
-        libshaderc_combined -j"$JOBS" > "$B/shaderc.build.log" 2>&1) || true  # (falla al juntar: abajo)
+        libshaderc_combined -j"$JOBS" > "$B/shaderc.build.log" 2>&1) || true  # (fails when joining: below)
     for l in $SC_LIBS; do
-        [ -f "$SRC/shaderc/obj/local/$ABI/$l.a" ] || { echo "deps $ABI: shaderc falló, falta $l.a (mira $B/shaderc.build.log)"; exit 1; }
+        [ -f "$SRC/shaderc/obj/local/$ABI/$l.a" ] || { echo "deps $ABI: shaderc failed, $l.a is missing (see $B/shaderc.build.log)"; exit 1; }
     done
     rm -f "$P/lib/libshaderc_combined.a"
     (cd "$SRC/shaderc/obj/local/$ABI" && "$TC/bin/llvm-ar.exe" qcL "$PM/lib/libshaderc_combined.a" $(printf '%s.a ' $SC_LIBS) &&
@@ -163,9 +163,9 @@ if ! done_step shaderc; then
     mark shaderc
     echo "deps $ABI: shaderc"
 fi
-# ---- las cabeceras de Vulkan: las de MSYS2 (1.4.363, las del port de PC); las del NDK son de la 1.3.275
+# ---- the Vulkan headers: MSYS2's (1.4.363, the PC port's); the NDK's are 1.3.275
 if ! done_step vulkan; then
     cp -R /ucrt64/include/vulkan /ucrt64/include/vk_video /ucrt64/include/vma "$P/include/"
     mark vulkan
 fi
-echo "deps $ABI: listo en $P"
+echo "deps $ABI: ready in $P"

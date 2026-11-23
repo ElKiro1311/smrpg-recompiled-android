@@ -60,8 +60,8 @@ bool widescreen_ui_pane_partial(const float *u, uint64_t size) {
 // Off in rooms that should keep 16:9 framing (interiors, dungeons) -- see widescreen_update.
 static bool g_allowed = true;
 static bool g_indoor;
-// (SMRPG: el ensanchado de Link's Awakening necesita sus ganchos de cámara; en SMRPG la pantalla ancha la hace la propia
-// Unity con una pantalla del juego más ancha, runtime/hle/unity_screen.c, y aquí no se estira nada)
+// (SMRPG: Link's Awakening's widening needs its camera hooks; in SMRPG, Unity itself does the widescreen with a wider
+// game screen, runtime/hle/unity_screen.c, and nothing is stretched here)
 bool widescreen_allowed(void) {
     return g_game_las && g_allowed && g_settings.aspect == ASPECT_UNLOCKED && !ENV("LARECOMP_NO_WIDESCREEN");
 }
@@ -334,7 +334,7 @@ void widescreen_present_crop(uint64_t frame, double shape, float crop[4], double
 // Current level name for logs ("-" when not in play).
 const char *game_level_name(void) {
     extern int game_in_play(void);
-    if (!g_game_las) return "-";  // (SMRPG: PLAYER_STATUS_PTR es una dirección de LA)
+    if (!g_game_las) return "-";  // (SMRPG: PLAYER_STATUS_PTR is an LA address)
     uint64_t ps = LD64(GA(PLAYER_STATUS_PTR));
     return game_in_play() && ps && *(const char *)(uintptr_t)ps ? (const char *)(uintptr_t)ps : "-";
 }

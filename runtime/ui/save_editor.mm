@@ -319,7 +319,7 @@ extern "C" void save_editor_file_read(const char *path, uint64_t addr, int64_t o
 extern "C" void cheats_frame(void);      // cheats.mm
 extern "C" void difficulty_frame(void);  // difficulty.mm
 extern "C" void save_editor_frame(uint64_t frame) {
-    if (!g_game_las) return;  // (SMRPG: trucos, dificultad y pruebas del editor son de Link's Awakening)
+    if (!g_game_las) return;  // (SMRPG: the editor's cheats, difficulty and tests are Link's Awakening's)
     cheats_frame();
     difficulty_frame();
     static int watch = -1;  // LARECOMP_WATCH_SAVE=<lo>,<hi> (save offsets): log code touching that range

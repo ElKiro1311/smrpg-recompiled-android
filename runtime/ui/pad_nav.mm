@@ -7,7 +7,7 @@
 static std::atomic<SDL_JoystickID> g_last_pad{0};
 
 // Does the bottom button confirm for a pad of layout family `fam`? Game layout: as the game's A does - the right one by
-// default; (SMRPG) the bottom one with «Invertir A-B» (or A bound there by hand). Controller convention: Xbox /
+// default; (SMRPG) the bottom one with "Swap A-B" (or A bound there by hand). Controller convention: Xbox /
 // PlayStation / generic pads (#172).
 static bool south_confirms(int fam) {
     if (g_settings.menu_confirm == MENU_CONFIRM_CONTROLLER) return fam != 0;

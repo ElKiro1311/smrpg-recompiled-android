@@ -1,9 +1,0 @@
-Cabeceras de la API del SDK de AMD FSR 2.4 (FidelityFX SDK, AMD), con su licencia MIT en cada archivo, en la misma
-estructura de carpetas que el SDK (las cabeceras se incluyen entre sí con rutas relativas).
-
-Las usan runtime/nvn/vulkan/vk_fsr.cpp (FSR) y vk_fg.cpp (generación de fotogramas). En tiempo de ejecución hacen falta, junto a smrpg-recomp.exe, las DLL firmadas
-del SDK (con su propia licencia de redistribución de AMD, por eso no están en el repositorio):
-  amd_fidelityfx_loader_vk.dll
-  amd_fidelityfx_upscaler_vk.dll
-  amd_fidelityfx_framegeneration_vk.dll   (la generación de fotogramas; sin ella, solo FSR)
-Sin ellas, la opción «AMD FSR» del menú dice que no está disponible y el juego dibuja como siempre.

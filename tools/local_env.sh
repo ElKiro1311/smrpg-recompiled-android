@@ -1,8 +1,8 @@
-# tools/local_env.sh: las rutas de las herramientas de fuera del repositorio (SDK y NDK de Android, JDK...) de
-# local.env, en la raíz del repositorio (la carpeta de encima de esta). Lo cargan con «.» tools/android/apk.sh,
-# tools/android/deps.sh y tools/lsfg/build.sh. local.env: NOMBRE=valor por línea, sin comillas (los espacios valen);
-# git no lo sube (ver local.env.ejemplo). Lo que ya venga del entorno manda: el archivo solo rellena lo que falta.
-# (Se busca por la ruta de este archivo, no por $1: un «.» sin argumentos hereda los del guion que lo carga.)
+# tools/local_env.sh: the paths of the tools outside the repository (the Android SDK and NDK, the JDK...), from
+# local.env, at the root of the repository (the folder above this one). tools/android/apk.sh, tools/android/deps.sh and
+# tools/lsfg/build.sh load it with ".". local.env: NAME=value per line, without quotes (spaces are fine); git ignores it
+# (see local.env.example). What is already in the environment wins: the file only fills in what is missing.
+# (Found by the path of this file, not by $1: a "." without arguments inherits those of the script that loads it.)
 _le_f=$(dirname "${BASH_SOURCE[0]}")/../local.env
 if [ -f "$_le_f" ]; then
     while IFS='=' read -r _le_k _le_v || [ -n "$_le_k" ]; do

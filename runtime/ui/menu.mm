@@ -17,6 +17,7 @@
 
 #include "imgui.h"
 #include "option_rows.h"
+#include "tr.h"
 #include "imgui_internal.h"  // (NavCursorVisible)
 #include "osk.h"
 #include "pad_nav.h"
@@ -34,7 +35,7 @@ extern "C" uint64_t vk_lsfg_vram(int *measured);
 extern "C" bool vk_fg_generating(void);
 extern "C" bool rt_unity_screen_wanted(int *w, int *h);  // (SMRPG) runtime/hle/unity_screen.c
 extern "C" bool rt_unity_screen_follow_failed(void);  // (SMRPG) runtime/hle/unity_screen.c
-extern "C" void input_apply_background(void);  // runtime/hle/input.c (mandos en segundo plano)
+extern "C" void input_apply_background(void);  // runtime/hle/input.c (controllers in the background)
 // runtime/nvn/vulkan/device.c: the command buffer ImGui records into (a secondary one the recorder thread executes in
 // the window image's commands, or that buffer itself after the recorder caught up), then handed back
 extern "C" void *vk_overlay_begin(void *window_cmd);
@@ -65,11 +66,11 @@ bool rando_tab_took_back(void);  // rando_tab.mm: B went back from the Triforce 
 // ------------------------------------------------------------------ state shared with the main thread
 static std::atomic<bool> g_open{false};
 static std::atomic<bool> g_text_busy{false};  // a text field / the on-screen keyboard has the keys (render thread: ui_text_busy)
-static std::atomic<bool> g_want_fullscreen_apply{false};  // (SMRPG: el modo de pantalla y la resolución de pantalla)
-static std::atomic<int> g_last_full_mode{WIN_BORDERLESS};  // (F11 vuelve a la última que no era ventana)
+static std::atomic<bool> g_want_fullscreen_apply{false};  // (SMRPG: the display mode and the display resolution)
+static std::atomic<int> g_last_full_mode{WIN_BORDERLESS};  // (F11 goes back to the last one that was not windowed)
 
-// (SMRPG) El monitor de la ventana, leído en el hilo principal (SDL lo pide) para el menú: sus modos de pantalla completa
-// (un tamaño cada uno, con su frecuencia más alta), el escritorio, el área útil para una ventana y el tamaño de la ventana
+// (SMRPG) The window's monitor, read on the main thread (SDL requires it) for the menu: its fullscreen modes (one per
+// size, with its highest refresh rate), the desktop, the usable area for a window and the window's size
 struct DisplayInfo {
     int n;
     int w[64], h[64];
@@ -111,7 +112,7 @@ extern "C" void menu_test_open(void) {
 }
 
 void menu_tabs_focus(bool first_tab);
-static Settings g_settings_at_open;  // (SMRPG) los ajustes al abrir el menú: «Deshacer cambios»
+static Settings g_settings_at_open;  // (SMRPG) the settings when the menu opened: "Undo changes"
 static void set_open(bool open) {
     if (open == g_open.load()) return;
     g_open.store(open);
@@ -193,20 +194,20 @@ extern "C" bool menu_input_captured(void) { return capturing(); }
 
 bool menu_handle_event(const SDL_Event *e) {
     static bool back_down, start_down;
-    {   // (SMRPG Android) LARECOMP_LOG_INPUT=1: cada tecla y botón que llega (qué manda cada botón de un aparato)
+    {   // (SMRPG Android) LARECOMP_LOG_INPUT=1: every key and button that comes in (what each button of a device sends)
         static int log_input = -1;
         if (log_input < 0) log_input = getenv("LARECOMP_LOG_INPUT") != NULL;
         if (log_input) {
             if (e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP)
-                fprintf(stderr, "[entrada] tecla %s: scancode %d, key 0x%x (%s)\n", e->type == SDL_EVENT_KEY_DOWN ? "abajo" : "arriba",
+                fprintf(stderr, "[input] key %s: scancode %d, key 0x%x (%s)\n", e->type == SDL_EVENT_KEY_DOWN ? "down" : "up",
                         (int)e->key.scancode, (unsigned)e->key.key, SDL_GetKeyName(e->key.key));
             else if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e->type == SDL_EVENT_GAMEPAD_BUTTON_UP)
-                fprintf(stderr, "[entrada] mando %u botón %s: %d (%s)\n", (unsigned)e->gbutton.which,
-                        e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ? "abajo" : "arriba", (int)e->gbutton.button,
+                fprintf(stderr, "[input] controller %u button %s: %d (%s)\n", (unsigned)e->gbutton.which,
+                        e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ? "down" : "up", (int)e->gbutton.button,
                         SDL_GetGamepadStringForButton((SDL_GamepadButton)e->gbutton.button));
             else if (e->type == SDL_EVENT_JOYSTICK_BUTTON_DOWN || e->type == SDL_EVENT_JOYSTICK_BUTTON_UP)
-                fprintf(stderr, "[entrada] joystick %u botón crudo %s: %d\n", (unsigned)e->jbutton.which,
-                        e->type == SDL_EVENT_JOYSTICK_BUTTON_DOWN ? "abajo" : "arriba", (int)e->jbutton.button);
+                fprintf(stderr, "[input] joystick %u raw button %s: %d\n", (unsigned)e->jbutton.which,
+                        e->type == SDL_EVENT_JOYSTICK_BUTTON_DOWN ? "down" : "up", (int)e->jbutton.button);
         }
     }
     if (g_open.load() && bind_capture_event(e)) return true;  // Controls tab waiting for a new binding: it takes the press
@@ -232,7 +233,7 @@ bool menu_handle_event(const SDL_Event *e) {
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F11 ||
                                (e->key.scancode == SDL_SCANCODE_RETURN && (e->key.mod & (SDL_KMOD_ALT | SDL_KMOD_GUI))) ||
                                (e->key.scancode == SDL_SCANCODE_F && (e->key.mod & SDL_KMOD_GUI) && (e->key.mod & SDL_KMOD_CTRL)))) {
-            // (SMRPG) entre la ventana y el último modo que no lo era (sin bordes, de entrada)
+            // (SMRPG) between windowed and the last mode that was not (borderless, to begin with)
             if (g_settings.window_mode == WIN_WINDOW) g_settings.window_mode = g_last_full_mode.load();
             else g_last_full_mode.store(g_settings.window_mode), g_settings.window_mode = WIN_WINDOW;
             g_settings.fullscreen = g_settings.window_mode != WIN_WINDOW;
@@ -321,8 +322,8 @@ void menu_apply_window_requests(void *win) {
     static bool text_input;
     bool want_text = capturing();
 #ifdef __ANDROID__
-    // (SMRPG Android) ahí empezar la entrada de texto saca el teclado en pantalla del sistema, que tapaba medio menú en
-    // cuanto se abría: solo con un campo de texto en edición (con el mando, el teclado propio del menú: osk.mm)
+    // (SMRPG Android) there, starting text input brings up the system's on-screen keyboard, which covered half the menu
+    // as soon as it opened: only with a text field being edited (with the controller, the menu's own keyboard: osk.mm)
     want_text = want_text && g_text_busy.load();
 #endif
     if (want_text != text_input) {
@@ -337,7 +338,7 @@ void menu_apply_window_requests(void *win) {
     }
     if (uint32_t r = __atomic_exchange_n(&g_window_resize_request, 0u, __ATOMIC_RELAXED))
         SDL_SetWindowSize(w, (int)(r >> 16), (int)(r & 0xffff));
-    static uint64_t next_info;  // (el monitor, para el menú: cada segundo; también lo lee el modo al aplicarse)
+    static uint64_t next_info;  // (the monitor, for the menu: every second; the mode also reads it when applied)
     uint64_t now = SDL_GetTicks();
     if (now >= next_info) {
         next_info = now + 1000;
@@ -345,14 +346,14 @@ void menu_apply_window_requests(void *win) {
     }
 }
 
-// (SMRPG) El monitor de la ventana (hilo principal)
+// (SMRPG) The window's monitor (main thread)
 static void refresh_display_info(SDL_Window *w) {
     SDL_DisplayID d = SDL_GetDisplayForWindow(w);
     if (!d) d = SDL_GetPrimaryDisplay();
     DisplayInfo di = {};
     int count = 0;
     SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(d, &count);
-    for (int i = 0; modes && i < count && di.n < 64; i++) {  // (SDL las da de la mayor a la menor)
+    for (int i = 0; modes && i < count && di.n < 64; i++) {  // (SDL gives them from largest to smallest)
         const SDL_DisplayMode *m = modes[i];
         float pd = m->pixel_density > 0 ? m->pixel_density : 1;
         int mw = (int)lroundf(m->w * pd), mh = (int)lroundf(m->h * pd);
@@ -373,13 +374,13 @@ static void refresh_display_info(SDL_Window *w) {
     if (SDL_GetDisplayUsableBounds(d, &u)) di.usable_w = u.w, di.usable_h = u.h;
     SDL_GetWindowSizeInPixels(w, &di.win_w, &di.win_h);
     static bool logged;
-    if (!logged && di.n) {  // (al registro, una vez: lo que ofrece el monitor)
+    if (!logged && di.n) {  // (to the log, once: what the monitor offers)
         logged = true;
         char list[1024];
         int k = 0;
         for (int i = 0; i < di.n && k < (int)sizeof list - 32; i++)
             k += snprintf(list + k, sizeof list - k, "%s%dx%d@%.0f", i ? ", " : "", di.w[i], di.h[i], di.hz[i]);
-        LOG("[ventana] monitor %dx%d@%.0f (área útil %dx%d); modos: %s\n", di.desk_w, di.desk_h, di.desk_hz, di.usable_w,
+        LOG("[window] monitor %dx%d@%.0f (usable area %dx%d); modes: %s\n", di.desk_w, di.desk_h, di.desk_hz, di.usable_w,
             di.usable_h, list);
     }
     pthread_mutex_lock(&g_disp_lock);
@@ -387,17 +388,17 @@ static void refresh_display_info(SDL_Window *w) {
     pthread_mutex_unlock(&g_disp_lock);
 }
 
-// (SMRPG) El modo de pantalla (hilo principal; device.c ui_window_init lo aplica al crear la ventana, antes de que el
-// juego pida su resolución). Ventana: con marco, al tamaño de «Resolución de pantalla» (en píxeles; centrada). Sin
-// bordes: una ventana sin marco del tamaño y en la posición del monitor, sin pantalla completa (Alt+Tab al momento).
-// Pantalla completa: exclusiva, al modo del monitor más cercano a «Resolución de pantalla» (o el del escritorio).
-// La ventana de las pruebas (LARECOMP_WINDOW / LARECOMP_HIDDEN) no cambia, salvo con LARECOMP_WINDOW_MODES=1.
+// (SMRPG) The display mode (main thread; device.c ui_window_init applies it when creating the window, before the game
+// asks for its resolution). Windowed: with a frame, at the "Display resolution" size (in pixels; centered). Borderless:
+// a frameless window with the monitor's size and position, not fullscreen (instant Alt+Tab). Fullscreen: exclusive, in
+// the monitor mode closest to "Display resolution" (or the desktop's). The test window (LARECOMP_WINDOW /
+// LARECOMP_HIDDEN) does not change, except with LARECOMP_WINDOW_MODES=1.
 extern "C" void menu_apply_window_mode_now(void *win) {
     SDL_Window *w = (SDL_Window *)win;
     if ((getenv("LARECOMP_WINDOW") || getenv("LARECOMP_HIDDEN")) && !getenv("LARECOMP_WINDOW_MODES")) return;
 #ifdef __ANDROID__
-    // (SMRPG Android: siempre a toda la pantalla, sin las barras del sistema; los modos de ventana son cosa del PC
-    // —con el modo «ventana» de los ajustes, esto quitaba la pantalla completa y la barra de estado tapaba el juego)
+    // (SMRPG Android: always full screen, without the system bars; the window modes are a PC thing - with the
+    // "windowed" mode in the settings, this took fullscreen away and the status bar covered the game)
     SDL_SetWindowFullscreen(w, true);
     return;
 #endif
@@ -421,7 +422,7 @@ extern "C" void menu_apply_window_mode_now(void *win) {
             SDL_SetWindowFullscreen(w, false);
             SDL_SyncWindow(w);
         }
-        SDL_SetWindowFullscreenMode(w, NULL);  // (el modo exclusivo de antes, olvidado)
+        SDL_SetWindowFullscreenMode(w, NULL);  // (the earlier exclusive mode, forgotten)
         SDL_Rect r = {0, 0, 0, 0};
         SDL_GetDisplayBounds(d, &r);
         if (mode == WIN_BORDERLESS) {
@@ -431,13 +432,13 @@ extern "C" void menu_apply_window_mode_now(void *win) {
         } else {
             SDL_SetWindowBordered(w, true);
             int ww = g_settings.out_w, wh = g_settings.out_h;
-            if ((ww <= 0 || wh <= 0) && prev != WIN_WINDOW && prev != -1) ww = 1280, wh = 720;  // (al salir de las otras)
+            if ((ww <= 0 || wh <= 0) && prev != WIN_WINDOW && prev != -1) ww = 1280, wh = 720;  // (leaving the others)
             if (ww > 0 && wh > 0) {
                 float dens = SDL_GetWindowPixelDensity(w);
                 if (!(dens > 0)) dens = 1;
                 int pw = (int)lroundf(ww / dens), ph = (int)lroundf(wh / dens);
                 SDL_Rect u;
-                if (SDL_GetDisplayUsableBounds(d, &u)) {  // (con el marco dentro del área útil)
+                if (SDL_GetDisplayUsableBounds(d, &u)) {  // (with the frame inside the usable area)
                     if (pw > u.w) pw = u.w;
                     if (ph > u.h - 40) ph = u.h - 40;
                 }
@@ -454,10 +455,10 @@ extern "C" void menu_apply_window_mode_now(void *win) {
     SDL_GetWindowSize(w, &px, &py);
     SDL_WindowFlags f = SDL_GetWindowFlags(w);
     const SDL_DisplayMode *fm = SDL_GetWindowFullscreenMode(w);
-    LOG("[ventana] %s: %dx%d píxeles (%dx%d en %d,%d), %s%s%s\n",
-        mode == WIN_FULLSCREEN ? "pantalla completa" : mode == WIN_BORDERLESS ? "sin bordes" : "ventana", pw, ph, px, py, x, y,
-        (f & SDL_WINDOW_FULLSCREEN) ? "pantalla completa" : "no pantalla completa", (f & SDL_WINDOW_BORDERLESS) ? ", sin marco" : "",
-        fm && (f & SDL_WINDOW_FULLSCREEN) ? " (modo exclusivo)" : "");
+    LOG("[window] %s: %dx%d pixels (%dx%d at %d,%d), %s%s%s\n",
+        mode == WIN_FULLSCREEN ? "full screen" : mode == WIN_BORDERLESS ? "borderless" : "window", pw, ph, px, py, x, y,
+        (f & SDL_WINDOW_FULLSCREEN) ? "full screen" : "not full screen", (f & SDL_WINDOW_BORDERLESS) ? ", no frame" : "",
+        fm && (f & SDL_WINDOW_FULLSCREEN) ? " (exclusive mode)" : "");
     refresh_display_info(w);
 }
 
@@ -584,20 +585,20 @@ extern "C" int input_pad_family(void);  // runtime/hle/input.c
 extern "C" double output_scale_dynamic_factor(void);
 
 extern "C" bool g_game_las;  // runtime/game_addresses.c (false en SMRPG)
-extern "C" int g_guest_w, g_guest_h;  // runtime/nvn/output_scale.c: la pantalla del juego (1920x1080 o más ancha)
-extern "C" bool renderer_hdr_state(bool *offered);  // runtime/nvn/vulkan/device.c: HDR10 activo ahora
+extern "C" int g_guest_w, g_guest_h;  // runtime/nvn/output_scale.c: the game's screen (1920x1080 or wider)
+extern "C" bool renderer_hdr_state(bool *offered);  // runtime/nvn/vulkan/device.c: HDR10 active now
 
-// ---------------------------------------------------------------- (SMRPG) el impacto de cada ajuste gráfico
-// Cada ajuste gráfico lleva bajo su nombre su impacto en CPU, GPU, RAM, disco (SSD) y memoria de vídeo con su valor de
-// ahora, en colores de semáforo, y el porqué en su descripción. La base es lo que mide el juego mientras corre
-// (runtime/perf_meter.c: la memoria de vídeo de cada clase, exacta; el tiempo de GPU por imagen; los píxeles que se
-// dibujan) y, para lo que no se puede separar en marcha, lo medido en el PC de pruebas el 2026-11-16 (Radeon RX 9070 XT, ventana
-// 3440x1440, 60 FPS, la misma escena): AMD FSR 1,4 ms por imagen, SMAA 0,4, anisótropo 16x 0,4, nitidez 0,2, la
-// generación de fotogramas 2,1 ms por imagen generada (contadores de Windows: +25 % de GPU con 120 del juego), el detalle
-// de texturas nada medible; la CPU a 60 / 120 / 240 FPS, 3 / 5,5 / 9,5 % del procesador, y +60 % con la generación; las
-// texturas HD (43) y el volcado, poco disco. Esos tiempos se escalan con los píxeles de ahora (medidos a 2,39 veces 1080p).
-// GPU: su coste frente al tiempo de una imagen al límite de FPS (verde < 15 %, amarillo < 40 %, rojo desde 40 %).
-// Memoria de vídeo: frente a lo que el controlador le deja al juego (verde < 4 %, amarillo < 12 %, rojo desde 12 %).
+// ---------------------------------------------------------------- (SMRPG) the impact of each graphics setting
+// Under its name, each graphics setting shows its impact on CPU, GPU, RAM, disk (SSD) and video memory at its current
+// value, in traffic-light colors, and the reason in its description. The basis is what the game measures while it runs
+// (runtime/perf_meter.c: the video memory of each kind, exact; the GPU time per frame; the pixels drawn) and, for what
+// cannot be told apart at run time, what was measured on the test PC on 2026-11-16 (Radeon RX 9070 XT, 3440x1440
+// window, 60 FPS, the same scene): AMD FSR 1.4 ms per frame, SMAA 0.4, 16x anisotropic 0.4, sharpness 0.2, frame
+// generation 2.1 ms per generated frame (Windows counters: +25% GPU with the game at 120), texture detail nothing
+// measurable; the CPU at 60 / 120 / 240 FPS, 3 / 5.5 / 9.5% of the processor, and +60% with frame generation; HD
+// textures (43) and dumping, little disk. Those times are scaled by the current pixels (measured at 2.39 times 1080p).
+// GPU: its cost against the time of one frame at the FPS limit (green < 15%, yellow < 40%, red from 40%).
+// Video memory: against what the driver allows the game (green < 4%, yellow < 12%, red from 12%).
 static const PerfNow *g_pm;
 static double frame_budget_ms(void) { return 1000.0 / (g_settings.fps_limit > 0 ? g_settings.fps_limit : 60); }
 static signed char gpu_lv(double ms) { return (signed char)pm_level(ms / frame_budget_ms(), 0.15, 0.40); }
@@ -605,12 +606,13 @@ static signed char vram_lv(double bytes) {
     double b = g_pm->vram_budget_gb * 1073741824.0;
     return (signed char)(b > 0 ? pm_level(bytes / b, 0.04, 0.12) : PM_OK);
 }
-static const char *num(double v, int dec) {  // con coma decimal (unos cuantos búferes: varios en una línea)
+static const char *num(double v, int dec) {  // with a decimal comma in Spanish (a few buffers: several on one line)
     static char buf[8][32];
     static int bi;
     char *b = buf[bi++ & 7];
     snprintf(b, sizeof buf[0], "%.*f", dec, v);
-    for (char *c = b; *c; c++) if (*c == '.') *c = ',';
+    if (ui_spanish())
+        for (char *c = b; *c; c++) if (*c == '.') *c = ',';
     return b;
 }
 static const char *mb(double bytes) {
@@ -625,12 +627,12 @@ static const char *mem(double bytes) {  // "350 MB" / "1,96 GB"
 }
 struct Impact {
     signed char lv[PM_N] = {0, 0, 0, 0, 0};
-    char val[PM_N][24] = {"", "", "", "", ""};  // lo que gasta en cada uno, corto ("2,5 ms", "501 MB"; vacío: nada)
+    char val[PM_N][24] = {"", "", "", "", ""};  // what it uses of each one, short ("2.5 ms", "501 MB"; empty: nothing)
     char why[900] = "";
     void set(int c, const char *fmt, ...) __attribute__((format(printf, 3, 4))) {
         va_list ap;
         va_start(ap, fmt);
-        vsnprintf(val[c], sizeof val[c], fmt, ap);
+        vsnprintf(val[c], sizeof val[c], tr(fmt), ap);
         va_end(ap);
     }
     void add(const char *fmt, ...) __attribute__((format(printf, 2, 3))) {
@@ -638,7 +640,7 @@ struct Impact {
         if (k && k + 2 < sizeof why) why[k++] = '\n', why[k] = 0;
         va_list ap;
         va_start(ap, fmt);
-        vsnprintf(why + k, sizeof why - k, fmt, ap);
+        vsnprintf(why + k, sizeof why - k, tr(fmt), ap);
         va_end(ap);
     }
 };
@@ -647,7 +649,7 @@ enum { IM_NONE, IM_OUTRES, IM_FPS, IM_WIDE, IM_RES, IM_AA, IM_FSRMODE, IM_FSRVER
 static void impact_for(int which, Impact &im) {
     const PerfNow *n = g_pm;
     double P = n->px > 0 ? n->px : 1, k = P / 2.39, B = frame_budget_ms();
-    double Po = 1;  // (la salida: la ventana, en veces 1080p)
+    double Po = 1;  // (the output: the window, as a multiple of 1080p)
     {
         DisplayInfo di;
         pthread_mutex_lock(&g_disp_lock);
@@ -659,22 +661,22 @@ static void impact_for(int which, Impact &im) {
     int f = g_settings.fps_limit > 0 ? g_settings.fps_limit : 60;
     switch (which) {
     case IM_NONE:
-        im.add("Sin efecto apreciable en ningún componente.");
+        im.add("No noticeable effect on any component.");
         break;
     case IM_TEXDETAIL:
-        im.add("Medido: sin cambio apreciable en ningún componente.");
+        im.add("Measured: no noticeable change on any component.");
         break;
     case IM_OUTRES:
         if (g_settings.res_mode != RES_MATCH) {
-            im.add("Con una resolución interna fija solo cambia el tamaño de la imagen final: poco.");
+            im.add("With a fixed internal resolution only the size of the final image changes: little.");
             break;
         }
-        im.add("Con la resolución interna «Igual que la pantalla», la de aquí decide cuánto se dibuja:");
+        im.add("With the internal resolution set to \"Match display\", this one decides how much is drawn:");
         /* fallthrough */
     case IM_RES:
     case IM_FSRMODE: {
-        // (SMRPG Android, revisión de la 0.6.0: la calidad de FSR / GSR 2 dibuja la escena a 1 / r² de la resolución
-        // interna P; con «Dinámica», solo nativo, como exec.c fsr_pass_begin)
+        // (SMRPG Android, 0.6.0 review: the FSR / GSR 2 quality draws the scene at 1 / r² of the internal resolution P;
+        // with "Dynamic", native only, like exec.c fsr_pass_begin)
         double r = 1.0;
         if (which == IM_FSRMODE && g_settings.res_mode != RES_DYNAMIC && g_settings.fsr_mode >= 1 && g_settings.fsr_mode <= 4) {
             static const double rr[] = {1.0, 1.5, 1.7, 2.0, 3.0};
@@ -682,21 +684,21 @@ static void impact_for(int which, Impact &im) {
         }
         double Pd = P / (r * r);
         double ms = Pd > 1 ? n->gpu_ms * (Pd - 1) / Pd : 0;
-        // (la memoria de AMD FSR solo con FSR elegido: con Snapdragon GSR 2 el SDK puede estar cargado sin usarse)
+        // (AMD FSR's memory only with FSR chosen: with Snapdragon GSR 2 the SDK may be loaded without being used)
         bool amd = which == IM_FSRMODE && g_settings.antialias == AA_FSR && n->vram_fsr;
         double vb = (double)n->vram_targets + (amd ? (double)n->vram_fsr : 0);
         im.lv[PM_GPU] = gpu_lv(ms), im.lv[PM_VRAM] = vram_lv(vb);
         im.set(PM_GPU, "%s ms", num(ms, 1)), im.set(PM_VRAM, "%s", mem(vb));
         if (r > 1.01)
-            im.add("GPU: la escena se dibuja con %s veces los píxeles de 1080p, %s veces menos que la resolución interna (%s), "
-                   "y se amplía; la interfaz va a la interna.", num(Pd, 2), num(r * r, 2), num(P, 2));
+            im.add("GPU: the scene is drawn with %s times the pixels of 1080p, %s times fewer than the internal "
+                   "resolution (%s), and enlarged; the interface stays at the internal one.", num(Pd, 2), num(r * r, 2), num(P, 2));
         else
-            im.add("GPU: se dibujan %s veces los píxeles de 1080p: unos %s ms de cada imagen (el %s %% de su tiempo a %d FPS).",
+            im.add("GPU: draws %s times the pixels of 1080p: about %s ms per frame (%s %% of its time at %d FPS).",
                    num(P, 2), num(ms, 1), num(ms / B * 100, 0), f);
-        im.add("Memoria de vídeo: %s en destinos de render a esa resolución (medido ahora)%s.", mem(n->vram_targets),
-               amd ? ", más lo de AMD FSR" : "");
+        im.add("Video memory: %s in render targets at that resolution (measured now)%s.", mem(n->vram_targets),
+               amd ? ", plus AMD FSR's own" : "");
 #ifndef __ANDROID__
-        im.add("(Medido en el PC de pruebas, con una RX 9070 XT: 4K, 7,6 ms y 0,5 GB; 8K, 13,7 ms y 2 GB.)");
+        im.add("(Measured on the test PC, with an RX 9070 XT: 4K, 7.6 ms and 0.5 GB; 8K, 13.7 ms and 2 GB.)");
 #endif
         break;
     }
@@ -705,38 +707,38 @@ static void impact_for(int which, Impact &im) {
         im.lv[PM_CPU] = (signed char)(f <= 60 ? PM_OK : f <= 144 ? PM_MID : PM_HIGH);
         im.lv[PM_GPU] = (signed char)pm_level(load, 0.6, 0.9);
         im.set(PM_CPU, "x%s", num(f / 60.0, f % 60 ? 1 : 0)), im.set(PM_GPU, "%s %%", num(load * 100, 0));
-        im.add("CPU: el trabajo del juego crece con las imágenes por segundo (medido: 3 %% del procesador a 60, 5,5 %% a "
-               "120, 9,5 %% a 240).");
-        im.add("GPU: %s ms por imagen x %d = el %s %% de la GPU.", num(n->gpu_ms, 1), f, num(load * 100, 0));
+        im.add("CPU: the game's work grows with the frame rate (measured: 3%% of the processor at 60, 5.5%% at 120, "
+               "9.5%% at 240).");
+        im.add("GPU: %s ms per frame x %d = %s%% of the GPU.", num(n->gpu_ms, 1), f, num(load * 100, 0));
         break;
     }
     case IM_WIDE: {
         double a = g_guest_h > 0 ? (double)g_guest_w / g_guest_h : 16.0 / 9, extra = a > 1.79 ? 1 - (16.0 / 9) / a : 0;
         if (g_settings.aspect != ASPECT_UNLOCKED || extra <= 0) {
-            im.add("Con la pantalla de ahora, nada (es 16:9).");
+            im.add("On the current display, nothing (it is 16:9).");
             break;
         }
         double ms = n->gpu_ms * extra, vb = n->vram_targets * extra;
         im.lv[PM_GPU] = gpu_lv(ms), im.lv[PM_VRAM] = vram_lv(vb);
         im.set(PM_GPU, "+%s ms", num(ms, 1)), im.set(PM_VRAM, "+%s", mem(vb));
-        im.add("GPU: un %s %% más de píxeles por imagen, unos %s ms.", num(extra / (1 - extra) * 100, 0), num(ms, 1));
-        im.add("Memoria de vídeo: unos %s más en destinos de render.", mem(vb));
+        im.add("GPU: %s%% more pixels per frame, about %s ms.", num(extra / (1 - extra) * 100, 0), num(ms, 1));
+        im.add("Video memory: about %s more in render targets.", mem(vb));
         break;
     }
     case IM_AA:
     case IM_FSRVER: {
         int aa = g_settings.antialias;
         if (aa == AA_OFF) {
-            im.add("Sin antialiasing: nada.");
+            im.add("No anti-aliasing: nothing.");
             break;
         }
         if (aa == AA_GSR2) {
-            // (SMRPG Android) Snapdragon GSR 2 (vulkan/exec.c gsr2_dispatch). Medido en el PC (RX 9070 XT,
-            // LARECOMP_GPUPROF_AT): 0,15 ms a 1080p, nativo y x1,5. En la Adreno, estimado con la tabla de Qualcomm para
-            // su variante de 2 pasadas en un Snapdragon 8 Gen 3 (salida 1260x2800: 0,905 ms a x2, 1,024 a x1,7, 1,107 a
-            // x1,5): ~0,183 ms por megapíxel de salida + 0,295 por megapíxel dibujado, y un 25 % más lento: por cada
-            // 1080p, 1,25 x (0,379 + 0,611 / r²) ms (1,24 en nativo, 0,66 a x2). Memoria: 3 imágenes RGBA16F (8 bytes
-            // por píxel): la de lo dibujado y 2 historias. r = 1 con «Dinámica» (solo nativo, como fsr_pass_begin).
+            // (SMRPG Android) Snapdragon GSR 2 (vulkan/exec.c gsr2_dispatch). Measured on the PC (RX 9070 XT,
+            // LARECOMP_GPUPROF_AT): 0.15 ms at 1080p, native and x1.5. On the Adreno, estimated from Qualcomm's table
+            // for its 2-pass variant on a Snapdragon 8 Gen 3 (1260x2800 output: 0.905 ms at x2, 1.024 at x1.7, 1.107 at
+            // x1.5): ~0.183 ms per output megapixel + 0.295 per drawn megapixel, and 25% slower: for each 1080p, 1.25 x
+            // (0.379 + 0.611 / r²) ms (1.24 at native, 0.66 at x2). Memory: 3 RGBA16F images (8 bytes per pixel): the
+            // one with what is drawn and 2 histories. r = 1 with "Dynamic" (native only, like fsr_pass_begin).
             double r = 1.0;
             if (g_settings.fsr_mode >= 1 && g_settings.fsr_mode <= 4 && g_settings.res_mode != RES_DYNAMIC) {
                 static const double rr[] = {1.0, 1.5, 1.7, 2.0, 3.0};
@@ -751,22 +753,23 @@ static void impact_for(int which, Impact &im) {
             im.lv[PM_GPU] = gpu_lv(ms), im.lv[PM_VRAM] = vram_lv(vb);
             im.set(PM_GPU, "+%s ms", num(ms, 2)), im.set(PM_VRAM, "%s", mem(vb));
 #ifdef __ANDROID__
-            im.add("GPU: unos %s ms por imagen, estimado con la tabla de Qualcomm (Snapdragon 8 Gen 3, salida 1260x2800: 0,9 "
-                   "ms ampliando x2, 1,1 ms ampliando x1,5) y un 25 %% más para esta GPU. Con «Calidad de GSR 2» por debajo de "
-                   "nativo, la escena cuesta mucho menos.", num(ms, 2));
+            im.add("GPU: about %s ms per frame, estimated from Qualcomm's table (Snapdragon 8 Gen 3, 1260x2800 "
+                   "output: 0.9 ms upscaling x2, 1.1 ms upscaling x1.5) plus 25%% for this GPU. With \"GSR 2 "
+                   "quality\" below native, the scene costs much less.", num(ms, 2));
 #else
-            im.add("GPU: unos %s ms por imagen (medido: 0,15 ms a 1080p en una RX 9070 XT).", num(ms, 2));
+            im.add("GPU: about %s ms per frame (measured: 0.15 ms at 1080p on an RX 9070 XT).", num(ms, 2));
 #endif
-            im.add("Memoria de vídeo: %s (sus 3 imágenes: lo dibujado y 2 historias).", mem(vb));
+            im.add("Video memory: %s (its 3 images: what is drawn and 2 histories).", mem(vb));
             break;
         }
         if (aa == AA_FSR && !n->vram_fsr) {
-            im.add("AMD FSR no está funcionando ahora (%s): nada.", vk_fsr_status());
+            im.add("AMD FSR is not running right now (%s): nothing.", vk_fsr_status());
             break;
         }
-        // (FSR) medido en el PC de pruebas (RX 9070 XT) con su pasada aparte (LARECOMP_GPUPROF_AT): FSR 4, 1,4 ms a 3440x1440 y
-        // 3,1 ms a 5160x2160 (crece con los píxeles: su red neuronal pasa por todos); a 5160x2160, FSR 3.1 2,25 ms (72 %)
-        // y FSR 2.3 1,7 ms (54 %). La versión: la elegida, o con «Automática» la que corre (el estado de AMD FSR).
+        // (FSR) measured on the test PC (RX 9070 XT) with its pass on its own (LARECOMP_GPUPROF_AT): FSR 4, 1.4 ms at
+        // 3440x1440 and 3.1 ms at 5160x2160 (it grows with the pixels: its neural network goes over all of them); at
+        // 5160x2160, FSR 3.1 2.25 ms (72%) and FSR 2.3 1.7 ms (54%). The version: the chosen one, or with "Automatic"
+        // the one running (AMD FSR's status).
         int ver = g_settings.fsr_version;
         for (const char *s = vk_fsr_status(); !ver && *s; s++)
             if (s[0] >= '2' && s[0] <= '4' && s[1] == '.') ver = s[0] - '0';
@@ -777,26 +780,27 @@ static void impact_for(int which, Impact &im) {
         if (aa == AA_FSR) {
             im.lv[PM_VRAM] = vram_lv((double)n->vram_fsr);
             if (n->vram_fsr) im.set(PM_VRAM, "%s", mem(n->vram_fsr));
-            im.add("GPU: unos %s ms por imagen (medido: FSR 4, 1,4 ms a 3440x1440 y 3,1 ms a 5160x2160; a 5160x2160, "
-                   "FSR 3.1 2,3 ms y FSR 2.3 1,7 ms; estimado para los píxeles de ahora).", num(ms, 1));
-            if (P > Po * 1.1)  // (la resolución interna por encima de la ventana: FSR trabaja a la interna)
-                im.add("FSR trabaja a la resolución interna, aquí %s veces los píxeles de la ventana: con la resolución "
-                       "interna igual que la pantalla costaría unos %s ms. Para más FPS: esa resolución, «Calidad de FSR» o "
-                       "la generación de fotogramas con el límite de FPS a la mitad.", num(P / Po, 2), num(1.4 * vf * ko, 1));
-            if (n->vram_fsr) im.add("Memoria de vídeo: %s (su contexto, según AMD, y su imagen).", mem(n->vram_fsr));
-            else im.add("Memoria de vídeo: ahora no está activo (a esta resolución no se pudo crear, o aún no hizo falta).");
+            im.add("GPU: about %s ms per frame (measured: FSR 4, 1.4 ms at 3440x1440 and 3.1 ms at 5160x2160; at "
+                   "5160x2160, FSR 3.1 2.3 ms and FSR 2.3 1.7 ms; estimated for the current pixels).", num(ms, 1));
+            if (P > Po * 1.1)  // (the internal resolution above the window's: FSR works at the internal one)
+                im.add("FSR works at the internal resolution, here %s times the window's pixels: with the internal "
+                       "resolution matching the display it would cost about %s ms. For more FPS: that resolution, "
+                       "\"FSR quality\", or frame generation with the FPS limit halved.", num(P / Po, 2), num(1.4 * vf * ko, 1));
+            if (n->vram_fsr) im.add("Video memory: %s (its context, according to AMD, and its image).", mem(n->vram_fsr));
+            else im.add("Video memory: not active right now (it could not be created at this resolution, or it has "
+                        "not been needed yet).");
         } else
-            im.add("GPU: unos %s ms por imagen (medido: 0,4 ms a 3440x1440). Memoria de vídeo: poca.", num(ms, 1));
+            im.add("GPU: about %s ms per frame (measured: 0.4 ms at 3440x1440). Video memory: little.", num(ms, 1));
         break;
     }
     case IM_FG:
     case IM_FGVER: {
         if (!g_settings.framegen) {
-            im.add("Apagada: nada.");
+            im.add("Off: nothing.");
             break;
         }
         if (!n->vram_fg) {
-            im.add("La generación no está funcionando ahora (%s): nada.", vk_fg_status());
+            im.add("Generation is not running right now (%s): nothing.", vk_fg_status());
             break;
         }
         bool light = which == IM_FGVER && g_settings.fg_version == 3;
@@ -804,31 +808,31 @@ static void impact_for(int which, Impact &im) {
         im.lv[PM_GPU] = gpu_lv(ms), im.lv[PM_CPU] = PM_MID, im.lv[PM_VRAM] = vram_lv((double)n->vram_fg);
         im.set(PM_GPU, "+%s ms", num(ms, 1)), im.set(PM_CPU, "+60 %%"), im.set(PM_RAM, "+80 MB");
         im.set(PM_VRAM, "%s", mem(n->vram_fg));
-        im.add("GPU: unos %s ms por cada imagen generada (medido con los contadores de Windows: 2,1 ms con FG 4 a "
-               "3440x1440, +25 %% de GPU con 120 imágenes del juego)%s.", num(ms, 1), light ? "; FG 3.1, más ligera "
-               "(estimado: la mitad)" : "");
-        im.add("CPU: +60 %% (medido: de 5,5 a 9 %% del procesador a 120 FPS). RAM: +80 MB.");
-        im.add("Memoria de vídeo: %s (su contexto y su swapchain, según AMD).", mem(n->vram_fg));
+        im.add("GPU: about %s ms per generated frame (measured with the Windows counters: 2.1 ms with FG 4 at "
+               "3440x1440, +25%% GPU with 120 game frames)%s.", num(ms, 1), light ? tr("; FG 3.1, lighter "
+               "(estimated: half)") : "");
+        im.add("CPU: +60%% (measured: from 5.5 to 9%% of the processor at 120 FPS). RAM: +80 MB.");
+        im.add("Video memory: %s (its context and its swapchain, according to AMD).", mem(n->vram_fg));
         break;
     }
     case IM_LSFG: {
-        // (SMRPG) la generación de Lossless Scaling (vulkan/vk_lsfg.c). GPU: medida ahora, con marcas de tiempo alrededor
-        // de su trabajo de cada imagen real (el movimiento y las N intermedias), del rato antes de abrir el menú (con él
-        // abierto no genera; en una RX 9070 XT a 1080p: x2, 1,4 ms; en modo rendimiento, 0,77; x3, 2,2; flujo al 50 %,
-        // 1,2). Memoria: sus N + 2 imágenes RGBA16F de la ventana, las N de más de la cadena y lo suyo interno (medido con
-        // VK_EXT_memory_budget; sin ella, estimado con lo del PC a 1080p: 43 MB con el flujo al 75 %, igual con x2, x3 o
-        // x4; 20 al 50 %; 27 en modo rendimiento).
-        // (SMRPG Android 0.8.9) el aviso del encargo, primero y siempre: cuándo conviene, qué fija y el retraso
-        // que cuesta. En la fuente Latin-1 del menú, sin caracteres fuera de ella.
-        im.add("Conviene solo si el juego va por debajo de 60 fps.");
-        im.add("Fija las imágenes reales a las de la pantalla divididas por el multiplicador: a 120 Hz con x2, 60 fps reales.");
-        im.add("Y siempre añade retraso: al menos un fotograma real, más lo que tarda en generar.");
+        // (SMRPG) Lossless Scaling frame generation (vulkan/vk_lsfg.c). GPU: measured now, with timestamps around its
+        // work for each real frame (the motion and the N in-between ones), over the stretch before the menu was opened
+        // (with it open it does not generate; on an RX 9070 XT at 1080p: x2, 1.4 ms; in performance mode, 0.77; x3,
+        // 2.2; flow at 50%, 1.2). Memory: its N + 2 window-sized RGBA16F images, the swapchain's N extra ones and its
+        // internals (measured with VK_EXT_memory_budget; without it, estimated from the PC's figures at 1080p: 43 MB
+        // with the flow at 75%, the same with x2, x3 or x4; 20 at 50%; 27 in performance mode).
+        // (SMRPG Android 0.8.9) the requested notice, first and always: when it is worth it, what it locks and the
+        // latency it costs. In the menu's Latin-1 font, with no characters outside it.
+        im.add("Only worth it if the game runs below 60 fps.");
+        im.add("Ties the real frames to the display's divided by the multiplier: at 120 Hz with x2, 60 real fps.");
+        im.add("And it always adds latency: at least one real frame, plus the time it takes to generate.");
         if (g_settings.lsfg < 2) {
-            im.add("Apagada: nada.");
+            im.add("Off: nothing.");
             break;
         }
         if (!vk_lsfg_wanted()) {
-            im.add("La generación no está funcionando ahora (%s): nada.", vk_lsfg_status());
+            im.add("Generation is not running right now (%s): nothing.", vk_lsfg_status());
             break;
         }
         int nn = g_settings.lsfg - 1, meas = 0;
@@ -839,86 +843,90 @@ static void impact_for(int which, Impact &im) {
         im.lv[PM_VRAM] = vram_lv(vb), im.set(PM_VRAM, "%s", mem(vb));
         if (ms > 0) {
             im.lv[PM_GPU] = gpu_lv(ms), im.set(PM_GPU, "+%s ms", num(ms, 2));
-            im.add("GPU: %s ms por cada imagen real (medido antes de abrir este menú: el movimiento entre la anterior y esa, "
-                   "y %s).", num(ms, 2), nn == 1 ? "la intermedia" : nn == 2 ? "las 2 intermedias" : "las 3 intermedias");
+            im.add("GPU: %s ms per real frame (measured before opening this menu: the motion between the previous one "
+                   "and it, and %s).", num(ms, 2), nn == 1 ? tr("the one in between") : nn == 2 ? tr("the 2 in between") : tr("the 3 in between"));
         } else
-            im.add("GPU: se mide mientras genera (con este menú cerrado): vuelve a mirar aquí después de jugar un poco.%s",
+            im.add("GPU: measured while it generates (with this menu closed): look here again after playing a "
+                   "little.%s",
 #ifdef __ANDROID__
                    "");
 #else
-                   " (Medido en una RX 9070 XT a 1080p: x2, 1,4 ms por imagen real; en modo rendimiento, 0,8; x3, 2,2.)");
+                   tr(" (Measured on an RX 9070 XT at 1080p: x2, 1.4 ms per real frame; in performance mode, 0.8; x3, "
+                   "2.2.)"));
 #endif
-        im.add("Memoria de vídeo: unos %s (sus %d imágenes de la ventana en coma flotante, %d más de la cadena y lo suyo).",
+        im.add("Video memory: about %s (its %d floating-point window images, %d extra swapchain images and its own).",
                mem(vb), nn + 2, nn);
         break;
     }
     case IM_SS: {
         int s = g_settings.supersample > 0 ? g_settings.supersample : 1;
         if (s <= 1) {
-            im.add("Sin supersampling: nada.");
+            im.add("No supersampling: nothing.");
             break;
         }
         double fr = (double)(s - 1) / s, ms = n->gpu_ms * fr, vb = n->vram_targets * fr;
         im.lv[PM_GPU] = gpu_lv(ms), im.lv[PM_VRAM] = vram_lv(vb);
         im.set(PM_GPU, "+%s ms", num(ms, 1)), im.set(PM_VRAM, "+%s", mem(vb));
-        im.add("GPU: x%d píxeles, unos %s ms de cada imagen (medido: x4 a 3440x1440 sube de 3,9 a 13 ms).", s, num(ms, 1));
-        im.add("Memoria de vídeo: unos %s en destinos de render más grandes.", mem(vb));
+        im.add("GPU: x%d pixels, about %s ms per frame (measured: x4 at 3440x1440 goes from 3.9 to 13 ms).", s, num(ms, 1));
+        im.add("Video memory: about %s in larger render targets.", mem(vb));
         break;
     }
     case IM_SHARP:
         if (g_settings.sharpness <= 0) {
-            im.add("Apagada: nada.");
+            im.add("Off: nothing.");
             break;
         }
         im.lv[PM_GPU] = gpu_lv(0.2 * ko);
         im.set(PM_GPU, "+%s ms", num(0.2 * ko, 1));
-        im.add("GPU: unos %s ms por imagen (medido: 0,2 ms a 3440x1440).", num(0.2 * ko, 1));
+        im.add("GPU: about %s ms per frame (measured: 0.2 ms at 3440x1440).", num(0.2 * ko, 1));
         break;
     case IM_ANISO: {
         double ms = 0.4 * (g_settings.aniso / 16.0) * k;
         im.lv[PM_GPU] = gpu_lv(ms);
         if (g_settings.aniso) im.set(PM_GPU, "+%s ms", num(ms, 1));
-        if (g_settings.aniso) im.add("GPU: unos %s ms por imagen (medido: 0,4 ms con 16x a 3440x1440).", num(ms, 1));
-        else im.add("El del juego: nada.");
+        if (g_settings.aniso) im.add("GPU: about %s ms per frame (measured: 0.4 ms with 16x at 3440x1440).", num(ms, 1));
+        else im.add("Game default: nothing.");
         break;
     }
     case IM_SHADERS:
-        if (g_settings.shader_wait == 1) im.lv[PM_CPU] = PM_MID, im.set(PM_CPU, "tirones");
-        im.add("Cada shader nuevo se prepara en la CPU una vez (luego queda en la caché del disco). «Esperar» detiene el "
-               "juego mientras tanto: tirones.");
+        if (g_settings.shader_wait == 1) im.lv[PM_CPU] = PM_MID, im.set(PM_CPU, "hitches");
+        im.add("Each new shader is prepared on the CPU once (then it stays in the disk cache). \"Wait\" stops the "
+               "game meanwhile: hitches.");
         break;
     case IM_TEXHD:
         if (!g_settings.tex_pack || !n->vram_hd) {
-            im.add(g_settings.tex_pack ? "No hay texturas HD cargadas (la carpeta «texturas» está vacía, o las suyas aún no "
-                                         "salieron en pantalla): nada."
-                                       : "Apagadas: nada.");
+            im.add(g_settings.tex_pack ? "No HD textures loaded (the \"textures\" folder is empty, or the ones it has "
+                                         "have not been on screen yet): nothing."
+                                       : "Off: nothing.");
             break;
         }
         im.lv[PM_VRAM] = vram_lv((double)n->vram_hd);
-        im.set(PM_VRAM, "%s", mem(n->vram_hd)), im.set(PM_SSD, "al cargar");
-        im.add("Memoria de vídeo: %s en texturas HD (medido ahora).", mem(n->vram_hd));
-        im.add("Disco y CPU: cada PNG se lee y se descomprime al cargar su textura (medido con 43: apenas).");
+        im.set(PM_VRAM, "%s", mem(n->vram_hd)), im.set(PM_SSD, "on load");
+        im.add("Video memory: %s in HD textures (measured now).", mem(n->vram_hd));
+        im.add("Disk and CPU: each PNG is read and decompressed when its texture loads (measured with 43: barely "
+               "anything).");
         break;
     case IM_TEXDUMP:
         if (!g_settings.tex_dump) {
-            im.add("Apagado: nada.");
+            im.add("Off: nothing.");
             break;
         }
         im.lv[PM_SSD] = PM_MID;
         im.set(PM_SSD, "4 MB/s");
-        im.add("Disco: escribe un PNG por cada textura nueva (medido: hasta 4 MB/s al abrir un menú; la carpeta crece "
-               "mientras juegas). CPU: comprimirlos, poco.");
+        im.add("Disk: writes a PNG for each new texture (measured: up to 4 MB/s when opening a menu; the folder grows "
+               "as you play). CPU: compressing them, little.");
         break;
     case IM_HDR:
         if (!g_settings.hdr) {
-            im.add("Apagado: nada.");
+            im.add("Off: nothing.");
             break;
         }
-        im.add("Un paso más al final (pasar a HDR10) y una imagen de salida de 10 bits: poco (estimado, no medido).");
+        im.add("One more step at the end (conversion to HDR10) and a 10-bit output image: little (estimated, not "
+               "measured).");
         break;
     }
 }
-// La descripción de un ajuste con su impacto, y la línea de puntos de su fila (la siguiente)
+// A setting's description with its impact, and the line of dots of its row (the next one)
 static const char *with_impact(int which, const char *base) {
     Impact im;
     impact_for(which, im);
@@ -927,14 +935,14 @@ static const char *with_impact(int which, const char *base) {
     return base;
 }
 
-// Rendimiento ahora (arriba en el recuadro de la descripción, siempre): lo que gasta el juego en cada componente, medido
-// (runtime/perf_meter.c), con su semáforo
+// Performance now (at the top of the description pane, always): what the game uses of each component, measured
+// (runtime/perf_meter.c), with its traffic light
 static void meter_header(void *) {
     const PerfNow *n = g_pm;
     float w = ImGui::GetContentRegionAvail().x, fs = ImGui::GetFontSize(), ls = fs * 0.62f, vs = fs * 0.68f, rr = fs * 0.17f;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 o = ImGui::GetCursorScreenPos();
-    dl->AddText(ImGui::GetFont(), ls, o, IM_COL32(150, 154, 140, 255), "AHORA");
+    dl->AddText(ImGui::GetFont(), ls, o, IM_COL32(150, 154, 140, 255), tr("NOW"));
     float y = o.y + ls * 1.25f, cw = w / 5;
     static const char *const names[PM_N] = {"CPU", "GPU", "RAM", "SSD", "VRAM"};
     char v[PM_N][32];
@@ -957,18 +965,18 @@ static void meter_header(void *) {
     ImGui::Dummy(ImVec2(w, h + fs * 0.3f));
 }
 
-// Reiniciar el juego: otra copia con la misma línea de órdenes y los ajustes de ahora (los que piden volver a abrir el
-// juego, como el idioma, se aplican); esta se cierra. La nueva espera a que esta termine (LARECOMP_WAIT_PID,
-// runtime/platform/windows.c). Pide confirmación (B / Esc: no).
+// Restart the game: another copy with the same command line and the current settings (the ones that require reopening
+// the game, like the language, are applied); this one closes. The new one waits for this one to end (LARECOMP_WAIT_PID,
+// runtime/platform/windows.c). Asks for confirmation (B / Esc: no).
 static void restart_rows(void) {
     static int ask;
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))) ask = 0;
     bool pending = g_settings.language != g_settings_boot.language;
-    const char *d = "Cierra el juego y lo vuelve a abrir con los ajustes de ahora: lo que solo se aplica al abrirlo (el "
-                    "idioma) se aplica. Lo que no se haya guardado en la partida se pierde (el juego se autoguarda al "
-                    "cambiar de zona). Pide confirmación: pulsa otra vez.";
+    const char *d = "Closes the game and opens it again with the current settings: whatever only applies when it "
+                    "opens (the language) is applied. Anything not saved is lost (the game autosaves when you change "
+                    "areas). Asks for confirmation: press again.";
     if (pending || ask) opt_mark_next();
-    if (opt_action("Reiniciar el juego", ask ? "¿Seguro? Pulsa otra vez" : pending ? "Pendiente: el idioma" : "", d)) {
+    if (opt_action("Restart the game", ask ? "Sure? Press again" : pending ? "Pending: the language" : "", d)) {
         if (!ask) ask = 1;
         else {
             ask = 0;
@@ -980,11 +988,11 @@ static void restart_rows(void) {
             }
         }
     }
-    if (ask && opt_action("Cancelar", "", "Vuelve al menú sin reiniciar.")) ask = 0;
+    if (ask && opt_action("Cancel", "", "Back to the menu without restarting.")) ask = 0;
 }
 
-// Guardar, deshacer, restablecer, reiniciar: el pie del recuadro de la descripción (siempre, abajo a la derecha), con una
-// línea de estado. Restablecer y Reiniciar piden pulsar otra vez (B / Esc: no).
+// Save, undo, reset, restart: the footer of the description pane (always, at the bottom right), with a status line.
+// Reset and Restart ask for a second press (B / Esc: no).
 static void buttons_footer(void *) {
     float w = ImGui::GetContentRegionAvail().x, fs = ImGui::GetFontSize(), gap = fs * 0.25f, bw = (w - 3 * gap) / 4;
     static char saved[48];
@@ -994,8 +1002,8 @@ static void buttons_footer(void *) {
         ask_reset = ask_restart = 0;
     bool changed = memcmp(&g_settings, &g_settings_at_open, sizeof g_settings) != 0;
     bool pending = g_settings.language != g_settings_boot.language;
-    if (opt_pane_button("guardar", "Guardar", "Guarda ahora todos los ajustes en larecomp.ini (junto a los guardados). Se "
-                        "aplican al momento, y también se guardan solos al cerrar este menú.", bw, false, false)) {
+    if (opt_pane_button("save", "Save", "Saves all the settings to larecomp.ini now (next to the saves). They "
+                        "apply right away, and they are also saved when this menu closes.", bw, false, false)) {
         settings_save();
         time_t t = time(NULL);
         struct tm lt;
@@ -1004,21 +1012,21 @@ static void buttons_footer(void *) {
 #else
         localtime_r(&t, &lt);
 #endif
-        snprintf(saved, sizeof saved, "Guardado a las %02d:%02d:%02d", lt.tm_hour, lt.tm_min, lt.tm_sec);
+        snprintf(saved, sizeof saved, tr("Saved at %02d:%02d:%02d"), lt.tm_hour, lt.tm_min, lt.tm_sec);
         ask_reset = ask_restart = 0;
     }
     ImGui::SameLine(0, gap);
-    if (opt_pane_button("deshacer", "Deshacer", "Vuelve a los ajustes que había al abrir este menú, los de todas las pestañas "
-                        "(los controles no).", bw, false, !changed)) {
+    if (opt_pane_button("undo", "Undo", "Goes back to the settings there were when this menu opened, on every "
+                        "tab (except the controls).", bw, false, !changed)) {
         g_settings = g_settings_at_open;
         g_want_fullscreen_apply.store(true);
         input_apply_background();
         ask_reset = ask_restart = 0;
     }
     ImGui::SameLine(0, gap);
-    if (opt_pane_button("restablecer", ask_reset ? "¿Seguro?" : "Restablecer",
-                        "Pone los ajustes de esta pestaña como vienen (la resolución interna y el escalado, los de tu "
-                        "tarjeta). El idioma no cambia. Pide confirmación: pulsa otra vez.", bw, ask_reset, false)) {
+    if (opt_pane_button("reset", ask_reset ? "Sure?" : "Reset",
+                        "Puts this tab's settings back to their defaults (the internal resolution and the upscaling, "
+                        "the ones for your GPU). The language does not change. Asks for confirmation: press again.", bw, ask_reset, false)) {
         if (!ask_reset) ask_reset = 1, ask_restart = 0;
         else {
             ask_reset = 0;
@@ -1027,10 +1035,10 @@ static void buttons_footer(void *) {
         }
     }
     ImGui::SameLine(0, gap);
-    if (opt_pane_button("reiniciar", ask_restart ? "¿Seguro?" : "Reiniciar",
-                        "Cierra el juego y lo vuelve a abrir con los ajustes de ahora: lo que solo se aplica al abrirlo (el "
-                        "idioma) se aplica. Lo que no se haya guardado en la partida se pierde (el juego se autoguarda al "
-                        "cambiar de zona). Pide confirmación: pulsa otra vez.", bw, ask_restart || pending, false)) {
+    if (opt_pane_button("restart", ask_restart ? "Sure?" : "Restart",
+                        "Closes the game and opens it again with the current settings: whatever only applies when it "
+                        "opens (the language) is applied. Anything not saved is lost (the game autosaves when you "
+                        "change areas). Asks for confirmation: press again.", bw, ask_restart || pending, false)) {
         if (!ask_restart) ask_restart = 1, ask_reset = 0;
         else {
             ask_restart = 0;
@@ -1042,53 +1050,55 @@ static void buttons_footer(void *) {
             }
         }
     }
-    const char *st = ask_reset || ask_restart ? "Pulsa otra vez para confirmar (B o Esc: no)."
-                   : pending ? "Pendiente de reiniciar: el idioma."
-                   : saved[0] ? saved : "Los cambios se aplican al momento.";
+    const char *st = ask_reset || ask_restart ? "Press again to confirm (B or Esc: no)."
+                   : pending ? "Restart pending: the language."
+                   : saved[0] ? saved : "Changes apply right away.";
     float ss = fs * 0.62f;
     ImVec2 o = ImGui::GetCursorScreenPos();
     ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ss, ImVec2(o.x, o.y + fs * 0.15f),
                                         ask_reset || ask_restart || pending ? IM_COL32(236, 194, 84, 255)
-                                                                            : IM_COL32(150, 154, 140, 255), st);
+                                                                            : IM_COL32(150, 154, 140, 255), tr(st));
 }
 
-// (SMRPG) La pestaña de pantalla de SMRPG Recomp: sin lo de Link's Awakening (aspecto con sus ganchos de cámara,
-// desenfoque, Modo Héroe) y con resoluciones con nombre, supersampling, nitidez y filtrado anisótropo.
+// (SMRPG) SMRPG Recomp's display tab: without the Link's Awakening parts (aspect with its camera hooks, blur, Hero
+// Mode) and with named resolutions, supersampling, sharpness and anisotropic filtering.
 static void tab_display_smrpg(void) {
     float scale = ImGui::GetFontSize() / 34;
     g_pm = perf_meter_now();
     opt_begin("##video", scale);
-    opt_section("Juego");
-    {   // (el idioma de los textos del juego: runtime/services/am.c GetDesiredLanguage; Automático = el de Windows)
+    opt_section("Game");
+    {   // (the language of the game's text: runtime/services/am.c GetDesiredLanguage; Automatic = Windows's)
 #ifdef __ANDROID__
-        static const char *langs[N_LANGUAGES] = {"Automático (el del sistema)", "Japonés", "Inglés", "Español", "Francés",
+        static const char *langs[N_LANGUAGES] = {"Automatic (the system's)", "Japanese", "English", "Spanish", "French",
 #else
-        static const char *langs[N_LANGUAGES] = {"Automático (el de Windows)", "Japonés", "Inglés", "Español", "Francés",
+        static const char *langs[N_LANGUAGES] = {"Automatic (Windows')", "Japanese", "English", "Spanish", "French",
 #endif
-                                                 "Alemán", "Italiano", "Neerlandés", "Ruso", "Coreano", "Chino simplificado",
-                                                 "Chino tradicional"};
+                                                 "German", "Italian", "Dutch", "Russian", "Korean", "Chinese (Simplified)",
+                                                 "Chinese (Traditional)"};
         bool pending = g_settings.language != g_settings_boot.language;
-        opt_choice("Idioma del juego", &g_settings.language, langs, N_LANGUAGES, LANG_AUTO,
-                   pending ? "El idioma de los textos del juego (menús, diálogos). Se aplica al volver a abrir el juego: "
-                             "«Reiniciar el juego», al final de esta pestaña, lo hace ahora."
-                           : "El idioma de los textos del juego (menús, diálogos). Se aplica al volver a abrir el juego.",
+        opt_choice("Game language", &g_settings.language, langs, N_LANGUAGES, LANG_AUTO,
+                   pending ? "The language of the game's text (menus, dialogue) and of this menu. The game's own text "
+                             "changes the next time it opens: \"Restart the game\", at the end of this tab, does it "
+                             "now."
+                           : "The language of the game's text (menus, dialogue) and of this menu. The game's own text "
+                             "changes the next time it opens.",
                    false);
     }
-    opt_section("Pantalla");
-#ifndef __ANDROID__  // (SMRPG Android: siempre a pantalla completa, a la resolución de la pantalla)
+    opt_section("Display");
+#ifndef __ANDROID__  // (SMRPG Android: always fullscreen, at the screen's resolution)
     {
-        static const char *wm[] = {"Ventana", "Ventana sin bordes", "Pantalla completa"};
-        if (opt_choice("Modo de pantalla", &g_settings.window_mode, wm, 3, WIN_WINDOW, with_impact(IM_NONE,
-                       "Ventana: con marco, del tamaño de «Resolución de pantalla» (o el que le des arrastrando sus bordes). "
-                       "Ventana sin bordes: ocupa el monitor entero a su resolución, pero sin ser pantalla completa: Alt+Tab y "
-                       "los avisos de Windows van al momento. Pantalla completa: exclusiva, a la «Resolución de pantalla» "
-                       "(el monitor cambia de modo si es otra que la suya). F11 o Alt+Enter: entre la ventana y el último de "
-                       "los otros dos."), false)) {
+        static const char *wm[] = {"Windowed", "Borderless", "Fullscreen"};
+        if (opt_choice("Display mode", &g_settings.window_mode, wm, 3, WIN_WINDOW, with_impact(IM_NONE,
+                       "Windowed: with a frame, the size of \"Display resolution\" (or whatever you drag its edges "
+                       "to). Borderless: fills the whole monitor at its resolution without being exclusive full "
+                       "screen: Alt+Tab and Windows notifications are instant. Fullscreen: exclusive, at the "
+                       "\"Display resolution\" (the monitor switches mode if it is not its own). F11 or Alt+Enter: "
+                       "between the window and the last of the other two."), false)) {
             g_settings.fullscreen = g_settings.window_mode != WIN_WINDOW;
             g_want_fullscreen_apply.store(true);
         }
     }
-    {   // la resolución final: el tamaño de la ventana o el modo del monitor en pantalla completa
+    {   // the final resolution: the window size or the monitor mode in fullscreen
         DisplayInfo di;
         pthread_mutex_lock(&g_disp_lock);
         di = g_disp;
@@ -1107,18 +1117,18 @@ static void tab_display_smrpg(void) {
         static const char *names[66];
         int vw[66], vh[66], n = 0, sel = 0;
         if (g_settings.window_mode == WIN_BORDERLESS) {
-            snprintf(labels[0], sizeof labels[0], "%dx%d (la del monitor)", di.desk_w, di.desk_h);
+            snprintf(labels[0], sizeof labels[0], tr("%dx%d (the monitor's)"), di.desk_w, di.desk_h);
             names[0] = labels[0];
             int one = 0;
-            opt_choice("Resolución de pantalla", &one, names, 1, 0, with_impact(IM_OUTRES,
-                       "Sin bordes, la ventana ocupa el monitor entero: su resolución es la del monitor. Para otra, «Ventana» "
-                       "o «Pantalla completa»."), false);
+            opt_choice("Display resolution", &one, names, 1, 0, with_impact(IM_OUTRES,
+                       "Borderless, the window fills the whole monitor: its resolution is the monitor's. For another "
+                       "one, \"Windowed\" or \"Fullscreen\"."), false);
         } else {
             bool full = g_settings.window_mode == WIN_FULLSCREEN;
             if (full) snprintf(labels[0], sizeof labels[0], "Monitor (%dx%d)", di.desk_w, di.desk_h);
-            else snprintf(labels[0], sizeof labels[0], "Libre (%dx%d)", di.win_w, di.win_h);
+            else snprintf(labels[0], sizeof labels[0], tr("Free (%dx%d)"), di.win_w, di.win_h);
             vw[0] = vh[0] = 0, n = 1;
-            if (full) {  // los modos del monitor de su mismo aspecto (otro, el monitor lo estiraba a todo el panel)
+            if (full) {  // the monitor's modes of its own aspect (others, the monitor stretched to the whole panel)
                 double da = di.desk_h > 0 ? (double)di.desk_w / di.desk_h : 0;
                 for (int i = 0; i < di.n && n < 66; i++) {
                     if (da > 0 && di.h[i] > 0 && fabs((double)di.w[i] / di.h[i] / da - 1) > 0.02) continue;
@@ -1127,7 +1137,7 @@ static void tab_display_smrpg(void) {
                              di.hz[i]);
                     vw[n] = di.w[i], vh[n] = di.h[i], n++;
                 }
-            } else {  // tamaños de ventana que caben en el monitor (con el marco)
+            } else {  // window sizes that fit on the monitor (with the frame)
                 static const int pre[][2] = {{1280, 720},  {1366, 768},  {1600, 900},  {1920, 1080}, {1920, 1200},
                                              {2560, 1080}, {2560, 1440}, {2560, 1600}, {3440, 1440}, {3840, 1600},
                                              {3840, 2160}, {5120, 1440}, {5120, 2160}};
@@ -1142,13 +1152,14 @@ static void tab_display_smrpg(void) {
                 names[i] = labels[i];
                 if (vw[i] == g_settings.out_w && vh[i] == g_settings.out_h) sel = i;
             }
-            if (opt_choice("Resolución de pantalla", &sel, names, n, 0, with_impact(IM_OUTRES,
-                           full ? "La resolución del monitor en pantalla completa: sus modos del mismo aspecto que el suyo "
-                                  "(con su frecuencia más alta), para que el monitor no estire la imagen. Para otro aspecto "
-                                  "(por ejemplo 16:9 en un monitor 21:9), «Ventana» con esa resolución."
-                                : "El tamaño de la ventana, en píxeles (se centra en el monitor). Las de 21:9 y 32:9 dan la "
-                                  "vista ancha aunque el monitor sea 16:9 (con «Pantalla ancha»). Libre: el que tenga al "
-                                  "arrastrar sus bordes."),
+            if (opt_choice("Display resolution", &sel, names, n, 0, with_impact(IM_OUTRES,
+                           full ? "The monitor's resolution in full screen: its modes with the same aspect ratio as "
+                                  "its own (at their highest refresh rate), so that the monitor does not stretch the "
+                                  "image. For another aspect ratio (for example 16:9 on a 21:9 monitor), "
+                                  "\"Windowed\" at that resolution."
+                                : "The size of the window, in pixels (it is centered on the monitor). The 21:9 and "
+                                  "32:9 ones give the wide view even on a 16:9 monitor (with \"Widescreen\"). Free: "
+                                  "whatever it has when you drag its edges."),
                            false)) {
                 g_settings.out_w = vw[sel], g_settings.out_h = vh[sel];
                 g_want_fullscreen_apply.store(true);
@@ -1156,64 +1167,65 @@ static void tab_display_smrpg(void) {
         }
     }
 #endif
-    opt_toggle("Mostrar FPS", &g_settings.show_fps, false,
-               with_impact(IM_NONE, "Muestra las imágenes por segundo en la esquina superior derecha."));
+    opt_toggle("Show FPS", &g_settings.show_fps, false,
+               with_impact(IM_NONE, "Shows the frames per second in the top right corner."));
     {
         static const char *fl[] = {"30", "60", "90", "120", "144", "165", "240"};
         static const int flv[] = {30, 60, 90, 120, 144, 165, 240};
         int fi = 1;
         for (int i = 0; i < 7; i++) if (flv[i] == g_settings.fps_limit) fi = i;
-        if (opt_choice("Límite de FPS", &fi, fl, 7, 1, with_impact(IM_FPS,
-                       "Cuántas imágenes por segundo dibuja el juego: 60 es lo de la consola. Más alto, más fluido. Los "
-                       "combates van siempre a 60, como en la consola: su lógica avanza un paso por imagen, y más rápido "
-                       "desfasaría los golpes a tiempo, el sonido y las animaciones. Con la generación de fotogramas, 120 "
-                       "en pantalla."), false))
+        if (opt_choice("FPS limit", &fi, fl, 7, 1, with_impact(IM_FPS,
+                       "How many frames per second the game draws: 60 is what the console does. Higher is smoother. "
+                       "Battles always run at 60, as on the console: their logic advances one step per frame, and "
+                       "going faster would throw timed hits, sound and animations out of step. With frame "
+                       "generation, 120 on screen."), false))
             g_settings.fps_limit = flv[fi];
     }
 #ifdef __ANDROID__
-    {   // (SMRPG Android) la frecuencia que el juego pide a la pantalla: vulkan/vk_pacing.c vote_rate
-        static const char *mr[] = {"La del juego (suave)", "La del sistema (menos retardo)"};
+    {   // (SMRPG Android) the refresh rate the game asks the screen for: vulkan/vk_pacing.c vote_rate
+        static const char *mr[] = {"The game's (smooth)", "The system's (less latency)"};
         int mi = g_settings.match_refresh ? 0 : 1;
-        if (opt_choice("Frecuencia de la pantalla", &mi, mr, 2, 0, with_impact(IM_NONE,
-                       "Con la del juego, a 60 fps la pantalla va a 60 Hz y cada imagen dura lo mismo. Con la del sistema "
-                       "(a menudo 120 Hz) cada imagen se ve unos 9 ms antes, pero el compositor de Android puede ir tan "
-                       "justo que de vez en cuando una sale un refresco tarde: un pequeño tirón. Con la generación de "
-                       "Lossless Scaling, siempre la que esta necesita."), false))
+        if (opt_choice("Screen refresh rate", &mi, mr, 2, 0, with_impact(IM_NONE,
+                       "With the game's, at 60 fps the screen runs at 60 Hz and every frame lasts the same. With the "
+                       "system's (often 120 Hz) each frame shows about 9 ms earlier, but Android's compositor can "
+                       "cut it so fine that now and then one comes out a refresh late: a small hitch. With Lossless "
+                       "Scaling frame generation, always the one it needs."), false))
             g_settings.match_refresh = mi == 0;
     }
 #endif
     {
-        static const char *wide[] = {"Sí, llenar la pantalla", "No, 16:9 con bandas"};
+        static const char *wide[] = {"On (fill the screen)", "Off (16:9 with bars)"};
         char d[700];
         int n = snprintf(d, sizeof d,
-                         "Con una pantalla o ventana ultrawide (21:9, 32:9) o 16:10, el juego dibuja más escena a los lados (o "
-                         "arriba y abajo) en vez de bandas negras: su cámara se abre, nada se estira y la interfaz conserva sus "
-                         "proporciones. Sigue a la ventana: al cambiar el modo o la resolución de pantalla (o estirar la "
-                         "ventana) se adapta en un momento. No: 16:9 como en la consola, con bandas.\n\nAhora la pantalla del "
-                         "juego es de %d x %d.", g_guest_w, g_guest_h);
+                         tr("On an ultrawide (21:9, 32:9) or 16:10 display or window, the game draws more of the scene "
+                         "at the sides (or above and below) instead of black bars: its camera opens up, nothing is "
+                         "stretched and the interface keeps its proportions. It follows the window: change the "
+                         "display mode or resolution (or drag the window) and it adapts in a moment. Off: 16:9 as on "
+                         "the console, with bars.\n\nThe game's screen is now %d x %d."), g_guest_w, g_guest_h);
         int ww, wh;
         if (rt_unity_screen_wanted(&ww, &wh) && n > 0 && n < (int)sizeof d)
             snprintf(d + n, sizeof d - n, rt_unity_screen_follow_failed()
-                     ? " El juego no la cambió a %d x %d: lo hará al volver a abrirlo (mientras, con bandas)."
-                     : " Cambiando a %d x %d.", ww, wh);
-        opt_choice("Pantalla ancha", &g_settings.aspect, wide, 2, ASPECT_UNLOCKED, with_impact(IM_WIDE, d));
+                     ? tr(" The game did not change it to %d x %d: it will the next time it opens (until then, with bars).")
+                     : tr(" Changing to %d x %d."), ww, wh);
+        opt_choice("Widescreen", &g_settings.aspect, wide, 2, ASPECT_UNLOCKED, with_impact(IM_WIDE, d));
     }
-    {   // (los vídeos de CRI del juego, en su 16:9: runtime/hle/movie_fit.c)
-        static const char *mf[] = {"Bandas negras", "Llenar la pantalla"};
+    {   // (the game's CRI movies, in their 16:9: runtime/hle/movie_fit.c)
+        static const char *mf[] = {"Black bars", "Fill the screen"};
         double ga = g_guest_h > 0 ? (double)g_guest_w / g_guest_h : 16.0 / 9;
         bool other = g_settings.aspect == ASPECT_UNLOCKED && fabs(ga / (16.0 / 9) - 1) > 0.01;
         if (!other) opt_disable_next();
-        opt_choice("Vídeos en pantalla ancha", &g_settings.movie_fit, mf, 2, 1, with_impact(IM_NONE,
-                   other ? "Las películas del juego están hechas en 16:9. Llenar la pantalla: la película se amplía sin "
-                           "estirarse hasta cubrirla; en 21:9 se recorta un poco arriba y abajo (en 16:10, a los lados). "
-                           "El fondo animado del título se queda en 16:9 (su logotipo llega al borde de arriba). Bandas "
-                           "negras: la película entera en el centro, con negro a los lados. Se aplica en marcha."
-                         : "Solo con la pantalla ancha y una pantalla que no sea 16:9: con 16:9 los vídeos la llenan."),
+        opt_choice("Widescreen movies", &g_settings.movie_fit, mf, 2, 1, with_impact(IM_NONE,
+                   other ? "The game's movies are made in 16:9. Fill the screen: the movie is enlarged without "
+                           "stretching until it covers it; on 21:9 a little is cropped at the top and bottom (on "
+                           "16:10, at the sides). The animated title background stays in 16:9 (its logo reaches the "
+                           "top edge). Black bars: the whole movie in the center, with black at the sides. Applies "
+                           "right away."
+                         : "Only with widescreen on and a display that is not 16:9: on 16:9 the movies fill it."),
                    false);
     }
 
-    opt_section("Imagen");
-    static const char *res[] = {"Igual que la pantalla", "Dinámica", "720p", "900p", "1080p", "1440p", "1800p",
+    opt_section("Image");
+    static const char *res[] = {"Match display", "Dynamic", "720p", "900p", "1080p", "1440p", "1800p",
                                 "2160p (4K)", "2880p (5K)", "4320p (8K)", "50 %", "67 %", "75 %", "85 %"};
     static const int res_mode[] = {RES_MATCH, RES_DYNAMIC, RES_H720, RES_H900, 1, RES_H1440, RES_H1800, 2, RES_H2880, 4,
                                    RES_Q50, RES_Q67, RES_Q75, RES_Q85};
@@ -1227,221 +1239,225 @@ static void tab_display_smrpg(void) {
         float sx, sy;
         renderer_get_scale(&sx, &sy);
         char d[480];
-        int n = snprintf(d, sizeof d, "A qué resolución se dibuja el juego. Igual que la pantalla: la de tu monitor o "
-                                      "ventana. Dinámica: la mayor que tu tarjeta mantiene a velocidad completa. 720p a "
-                                      "4320p: esa altura, sea cual sea la ventana. Los porcentajes, de la pantalla.\n\n"
-                                      "Ahora: %.0f x %.0f.", (double)g_guest_w * sx, (double)g_guest_h * sy);
+        int n = snprintf(d, sizeof d, tr("The resolution the game is drawn at. Match display: that of your monitor or "
+                                      "window. Dynamic: the highest your GPU keeps at full speed. 720p to 4320p: "
+                                      "that height, whatever the window. The percentages are of the display.\n\nNow: "
+                                      "%.0f x %.0f."), (double)g_guest_w * sx, (double)g_guest_h * sy);
         if (g_settings.res_mode == RES_DYNAMIC)
-            snprintf(d + n, sizeof d - n, " Dinámica: %.0f %% de la pantalla.", output_scale_dynamic_factor() * 100);
-        if (opt_choice("Resolución interna", &ri, res, NRES, rdef, with_impact(IM_RES, d), false))
+            snprintf(d + n, sizeof d - n, tr(" Dynamic: %.0f%% of the display."), output_scale_dynamic_factor() * 100);
+        if (opt_choice("Internal resolution", &ri, res, NRES, rdef, with_impact(IM_RES, d), false))
             g_settings.res_mode = res_mode[ri], g_settings.res_auto = false;
     }
     {
-        // (SMRPG Android: y Snapdragon GSR 1, el escalado de Qualcomm hecho para las Adreno; también en el PC)
-        static const char *ups[] = {"Bilineal", "AMD FSR 1", "Snapdragon GSR 1"};
+        // (SMRPG Android: and Snapdragon GSR 1, Qualcomm's upscaling made for Adreno GPUs; on PC too)
+        static const char *ups[] = {"Bilinear", "AMD FSR 1", "Snapdragon GSR 1"};
         int ui = g_settings.upscaler == UPSCALE_BILINEAR ? 0 : g_settings.upscaler == UPSCALE_GSR1 ? 2 : 1;
-        if (opt_choice("Escalado", &ui, ups, 3, g_default_upscaler == UPSCALE_BILINEAR ? 0 : 1, with_impact(IM_NONE,
-                       "Cómo se amplía la imagen a la pantalla cuando se dibuja a menos resolución (Resolución interna por "
-                       "debajo de la pantalla). AMD FSR 1: escalado que respeta los bordes, más nítido. Snapdragon GSR 1: el "
-                       "de Qualcomm, escalado y afilado en una sola pasada, el más barato en las GPU Adreno (móviles y "
-                       "consolas Android). Bilineal: simple y suave.")))
+        if (opt_choice("Upscaling", &ui, ups, 3, g_default_upscaler == UPSCALE_BILINEAR ? 0 : 1, with_impact(IM_NONE,
+                       "How the image is enlarged to the screen when it is drawn at a lower resolution (internal "
+                       "resolution below the screen's). AMD FSR 1: edge-aware upscaling, sharper. Snapdragon GSR 1: "
+                       "Qualcomm's, upscaling and sharpening in a single pass, the cheapest on Adreno GPUs (phones "
+                       "and Android handhelds). Bilinear: simple and soft.")))
             g_settings.upscaler = ui == 2 ? UPSCALE_GSR1 : ui ? UPSCALE_SHARP : UPSCALE_BILINEAR, g_settings.upscaler_auto = false;
     }
 #ifdef __ANDROID__
-    {   // (SMRPG Android: AMD FSR 2 / 3 / 4 y su generación de fotogramas son bibliotecas de Windows: aquí no están;
-        // Snapdragon GSR 2 sí, sus sombreadores van dentro: vulkan/exec.c gsr2_dispatch)
+    {   // (SMRPG Android: AMD FSR 2 / 3 / 4 and its frame generation are Windows libraries: not here; Snapdragon GSR 2
+        // is, its shaders are built in: vulkan/exec.c gsr2_dispatch)
         if (g_settings.antialias == AA_FSR) g_settings.antialias = AA_SMAA;
-        static const char *aa[] = {"No", "SMAA", "Snapdragon GSR 2"};
+        static const char *aa[] = {"Off", "SMAA", "Snapdragon GSR 2"};
         int ai = g_settings.antialias == AA_GSR2 ? 2 : g_settings.antialias == AA_SMAA ? 1 : 0;
-        if (opt_choice("Antialiasing", &ai, aa, 3, 0, with_impact(IM_AA,
-                       "Suaviza los bordes dentados de la imagen. SMAA: busca los bordes y mezcla solo a lo largo de ellos, así "
-                       "las texturas siguen nítidas. Snapdragon GSR 2: antialiasing temporal de Qualcomm, hecho para las GPU "
-                       "Adreno, con los vectores de movimiento del propio juego: junta varios fotogramas, bordes y detalles "
-                       "finos estables, y puede dibujar la escena con menos píxeles y ampliarla («Calidad de GSR 2»). Se "
-                       "combinan con el supersampling.")))
+        if (opt_choice("Anti-aliasing", &ai, aa, 3, 0, with_impact(IM_AA,
+                       "Smooths the jagged edges of the image. SMAA: finds the edges and blends only along them, so "
+                       "textures stay sharp. Snapdragon GSR 2: Qualcomm's temporal anti-aliasing, made for Adreno "
+                       "GPUs, with the game's own motion vectors: it gathers several frames, with stable edges and "
+                       "fine detail, and it can draw the scene with fewer pixels and enlarge it (\"GSR 2 quality\"). "
+                       "They can be combined with supersampling.")))
             g_settings.antialias = ai == 2 ? AA_GSR2 : ai == 1 ? AA_SMAA : AA_OFF;
     }
 #else
     {
-        static const char *aa[] = {"No", "SMAA", "AMD FSR", "Snapdragon GSR 2"};
+        static const char *aa[] = {"Off", "SMAA", "AMD FSR", "Snapdragon GSR 2"};
         char d[900];
         snprintf(d, sizeof d,
-                 "Suaviza los bordes dentados de la imagen. SMAA: busca los bordes y mezcla solo a lo largo de ellos, así "
-                 "las texturas siguen nítidas. AMD FSR: antialiasing temporal (FSR 4 en las Radeon RX 9000, FSR 3.1 en las "
-                 "demás) con los vectores de movimiento del propio juego: junta varios fotogramas, bordes y detalles finos "
-                 "estables sin el coste del supersampling. Snapdragon GSR 2: el temporal de Qualcomm, más sencillo y "
-                 "barato, en cualquier tarjeta. Se combinan con el supersampling.\n\nAMD FSR: %s.",
+                 tr("Smooths the jagged edges of the image. SMAA: finds the edges and blends only along them, so "
+                 "textures stay sharp. AMD FSR: temporal anti-aliasing (FSR 4 on Radeon RX 9000, FSR 3.1 on the "
+                 "rest) with the game's own motion vectors: it gathers several frames, with stable edges and fine "
+                 "detail without the cost of supersampling. Snapdragon GSR 2: Qualcomm's temporal one, simpler and "
+                 "cheaper, on any GPU. They can be combined with supersampling.\n\nAMD FSR: %s."),
                  vk_fsr_status());
-        opt_choice("Antialiasing", &g_settings.antialias, aa, 4, AA_OFF, with_impact(IM_AA, d));
+        opt_choice("Anti-aliasing", &g_settings.antialias, aa, 4, AA_OFF, with_impact(IM_AA, d));
     }
 #endif
     if (g_settings.antialias == AA_GSR2) {
-        static const char *gm[] = {"Nativo (antialiasing)", "Calidad (x1,5)", "Equilibrado (x1,7)", "Rendimiento (x2)",
-                                   "Ultra rendimiento (x3)"};
-        opt_choice("Calidad de GSR 2", &g_settings.fsr_mode, gm, 5, 0, with_impact(IM_FSRMODE,
-                   "Nativo: la escena se dibuja a la resolución interna y GSR 2 solo quita los dientes de sierra. Los "
-                   "demás: la escena se dibuja con menos píxeles (1,5, 1,7, 2 o 3 veces menos de ancho y de alto) y GSR 2 "
-                   "la amplía a la resolución interna, para más imágenes por segundo y menos batería. La interfaz va "
-                   "siempre a la resolución completa. Con la resolución interna «Dinámica», solo nativo."),
+        static const char *gm[] = {"Native (anti-aliasing)", "Quality (x1.5)", "Balanced (x1.7)", "Performance (x2)",
+                                   "Ultra performance (x3)"};
+        opt_choice("GSR 2 quality", &g_settings.fsr_mode, gm, 5, 0, with_impact(IM_FSRMODE,
+                   "Native: the scene is drawn at the internal resolution and GSR 2 only removes the jaggies. The "
+                   "rest: the scene is drawn with fewer pixels (1.5, 1.7, 2 or 3 times less in width and height) and "
+                   "GSR 2 enlarges it to the internal resolution, for more frames per second and less battery. The "
+                   "interface is always at full resolution. With the internal resolution set to \"Dynamic\", native "
+                   "only."),
                    false);
     }
     if (g_settings.antialias == AA_FSR) {
-        static const char *fm[] = {"Nativo (antialiasing)", "Calidad (x1,5)", "Equilibrado (x1,7)", "Rendimiento (x2)",
-                                   "Ultra rendimiento (x3)"};
-        opt_choice("Calidad de FSR", &g_settings.fsr_mode, fm, 5, 0, with_impact(IM_FSRMODE,
-                   "Nativo: la escena se dibuja a la resolución interna y FSR solo quita los dientes de sierra. Los demás: "
-                   "la escena se dibuja con menos píxeles (1,5, 1,7, 2 o 3 veces menos de ancho y de alto) y FSR la amplía "
-                   "a la resolución interna, para más imágenes por segundo en tarjetas más modestas. La interfaz va siempre "
-                   "a la resolución completa. Con la resolución interna «Dinámica», solo nativo."),
+        static const char *fm[] = {"Native (anti-aliasing)", "Quality (x1.5)", "Balanced (x1.7)", "Performance (x2)",
+                                   "Ultra performance (x3)"};
+        opt_choice("FSR quality", &g_settings.fsr_mode, fm, 5, 0, with_impact(IM_FSRMODE,
+                   "Native: the scene is drawn at the internal resolution and FSR only removes the jaggies. The rest: "
+                   "the scene is drawn with fewer pixels (1.5, 1.7, 2 or 3 times less in width and height) and FSR "
+                   "enlarges it to the internal resolution, for more frames per second on more modest GPUs. The "
+                   "interface is always at full resolution. With the internal resolution set to \"Dynamic\", native "
+                   "only."),
                    false);
-        static const char *fv[] = {"Automática", "FSR 4", "FSR 3.1", "FSR 2.3"};
+        static const char *fv[] = {"Automatic", "FSR 4", "FSR 3.1", "FSR 2.3"};
         static const int fvv[] = {0, 4, 3, 2};
         int fi = 0;
         for (int i = 0; i < 4; i++) if (fvv[i] == g_settings.fsr_version) fi = i;
-        if (opt_choice("Versión de FSR", &fi, fv, 4, 0, with_impact(IM_FSRVER,
-                       "Qué versión de AMD FSR se usa. Automática: la mejor que corre tu tarjeta (FSR 4, de red neuronal, en "
-                       "las Radeon RX 9000; FSR 3.1 en las demás). FSR 3.1 y FSR 2.3: los algoritmos anteriores, en cualquier "
-                       "tarjeta. El cambio se aplica al momento."), false))
+        if (opt_choice("FSR version", &fi, fv, 4, 0, with_impact(IM_FSRVER,
+                       "Which version of AMD FSR is used. Automatic: the best your GPU runs (FSR 4, a neural network, "
+                       "on Radeon RX 9000; FSR 3.1 on the rest). FSR 3.1 and FSR 2.3: the earlier algorithms, on any "
+                       "GPU. The change applies right away."), false))
             g_settings.fsr_version = fvv[fi];
         char fgd[1000];
         snprintf(fgd, sizeof fgd,
-                 "Genera una imagen intermedia entre cada dos del juego con sus vectores de movimiento (AMD FSR Frame "
-                 "Generation: la 4, por red neuronal, en las Radeon RX 9000; la 3.1 en las demás): en pantalla, el doble de "
-                 "imágenes por segundo y un movimiento más fluido. Añade algo de retardo y, en lo que se mueve muy deprisa, "
-                 "algún defecto. Va mejor con al menos 60 imágenes del juego y con el límite de FPS en la mitad de la "
-                 "frecuencia del monitor (por ejemplo 120 en uno de 240 Hz: se ven 240). Se pausa con este menú abierto.\n\n"
-                 "Generación de fotogramas: %s.",
+                 tr("Generates a frame between every two of the game's with its motion vectors (AMD FSR Frame "
+                 "Generation: version 4, a neural network, on Radeon RX 9000; 3.1 on the rest): twice the frames per "
+                 "second on screen and smoother motion. It adds some latency and, on things that move very fast, the "
+                 "odd artifact. It works best with at least 60 game frames and the FPS limit at half the monitor's "
+                 "refresh rate (for example 120 on a 240 Hz one: you see 240). It pauses while this menu is "
+                 "open.\n\nFrame generation: %s."),
                  vk_fg_status());
-        opt_toggle("Generación de fotogramas", &g_settings.framegen, false, with_impact(IM_FG, fgd));
+        opt_toggle("Frame generation", &g_settings.framegen, false, with_impact(IM_FG, fgd));
         if (g_settings.framegen) {
-            static const char *gv[] = {"Automática", "FG 4 (IA)", "FG 3.1"};
+            static const char *gv[] = {"Automatic", "FG 4 (AI)", "FG 3.1"};
             static const int gvv[] = {0, 4, 3};
             int gi = 0;
             for (int i = 0; i < 3; i++) if (gvv[i] == g_settings.fg_version) gi = i;
-            if (opt_choice("Versión de la generación", &gi, gv, 3, 0, with_impact(IM_FGVER,
-                           "Qué generación de fotogramas de AMD se usa. Automática: la mejor que corre tu tarjeta (FG 4, de "
-                           "red neuronal, en las Radeon RX 9000; FG 3.1 en las demás). FG 3.1: el algoritmo anterior, en "
-                           "cualquier tarjeta. El cambio se aplica en un instante."), false))
+            if (opt_choice("Frame generation version", &gi, gv, 3, 0, with_impact(IM_FGVER,
+                           "Which AMD frame generation is used. Automatic: the best your GPU runs (FG 4, a neural "
+                           "network, on Radeon RX 9000; FG 3.1 on the rest). FG 3.1: the earlier algorithm, on any "
+                           "GPU. The change applies in a moment."), false))
                 g_settings.fg_version = gvv[gi];
         }
     }
-    {   // (SMRPG) la generación de fotogramas de Lossless Scaling (vulkan/vk_lsfg.c)
-        static const char *lm[] = {"No", "x2", "x3", "x4"};
+    {   // (SMRPG) Lossless Scaling frame generation (vulkan/vk_lsfg.c)
+        static const char *lm[] = {"Off", "x2", "x3", "x4"};
         int li = g_settings.lsfg >= 2 && g_settings.lsfg <= 4 ? g_settings.lsfg - 1 : 0;
         char d[1100];
         snprintf(d, sizeof d,
-                 "Genera imágenes intermedias entre las del juego con la generación de fotogramas de Lossless Scaling "
-                 "(LSFG 3.1): x2 muestra el doble de imágenes por segundo, x3 el triple, x4 el cuádruple. El juego va a la "
-                 "frecuencia de la pantalla dividida por el multiplicador (con una pantalla de 120 Hz y x2, 60 imágenes "
-                 "reales; con x4, 30) y se añade algo de retardo. Los combates necesitan 60 reales: si no llegan, mientras "
-                 "dura el combate va sin generar. Necesita tu copia de Lossless Scaling de Steam: %s. No va con HDR ni con "
-                 "la generación de AMD.\n\nAhora: %s.",
+                 tr("Generates frames between the game's with Lossless Scaling's frame generation (LSFG 3.1): x2 shows "
+                 "twice the frames per second, x3 three times, x4 four times. The game runs at the display's refresh "
+                 "rate divided by the multiplier (on a 120 Hz display with x2, 60 real frames; with x4, 30) and some "
+                 "latency is added. Battles need 60 real frames: if they don't get there, nothing is generated while "
+                 "the battle lasts. It needs your copy of Lossless Scaling from Steam: %s. It does not work with HDR "
+                 "or with AMD frame generation.\n\nNow: %s."),
 #ifdef __ANDROID__
-                 "copia su Lossless.dll a la carpeta de datos del juego",
+                 tr("copy its Lossless.dll to the game's data folder"),
 #else
-                 "se busca en tus bibliotecas de Steam",
+                 tr("it is looked for in your Steam libraries"),
 #endif
                  vk_lsfg_status());
-        // (una etiqueta corta: la larga se montaba sobre el valor)
-        if (opt_choice("Generación Lossless Scaling", &li, lm, 4, 0, with_impact(IM_LSFG, d), false))
+        // (a short label: the long one overlapped the value)
+        if (opt_choice("Lossless Scaling frame generation", &li, lm, 4, 0, with_impact(IM_LSFG, d), false))
             g_settings.lsfg = li ? li + 1 : 0;
         if (g_settings.lsfg) {
             static const char *fl[] = {"25 %", "50 %", "75 %", "100 %"};
             int fi = g_settings.lsfg_flow <= 37 ? 0 : g_settings.lsfg_flow <= 62 ? 1 : g_settings.lsfg_flow <= 87 ? 2 : 3;
-            if (opt_choice("Escala del flujo (LSFG)", &fi, fl, 4, 2, with_impact(IM_LSFG,
-                           "A qué resolución calcula LSFG el movimiento entre imágenes: menos, más barato y algo menos "
-                           "preciso. Para 1080p, el 75 % de Lossless Scaling; con pantallas grandes basta el 50 %."), false))
+            if (opt_choice("Flow scale (LSFG)", &fi, fl, 4, 2, with_impact(IM_LSFG,
+                           "The resolution at which LSFG computes the motion between frames: lower is cheaper and a "
+                           "little less precise. For 1080p, Lossless Scaling's 75%; on large displays 50% is enough."), false))
                 g_settings.lsfg_flow = 25 * (fi + 1);
 #ifdef __ANDROID__
             const bool perf_def = true;
 #else
             const bool perf_def = false;
 #endif
-            opt_toggle("Modo rendimiento (LSFG)", &g_settings.lsfg_perf, perf_def, with_impact(IM_LSFG,
-                       "La variante ligera de LSFG: bastante menos trabajo para la GPU, con algo menos de calidad en lo "
-                       "que se mueve deprisa."));
+            opt_toggle("Performance mode (LSFG)", &g_settings.lsfg_perf, perf_def, with_impact(IM_LSFG,
+                       "The light variant of LSFG: quite a bit less work for the GPU, with slightly lower quality on "
+                       "things that move fast."));
         }
     }
     {
-        static const char *ss[] = {"No", "x2", "x4", "x8", "x16"};
+        static const char *ss[] = {"Off", "x2", "x4", "x8", "x16"};
         static const int ssv[] = {1, 2, 4, 8, 16};
         int si = 0;
         for (int i = 0; i < 5; i++) if (ssv[i] == g_settings.supersample) si = i;
         if (opt_choice("Supersampling", &si, ss, 5, 0, with_impact(IM_SS,
-                       "Antialiasing por supermuestreo: el juego se dibuja con 2, 4, 8 o 16 veces más píxeles y se reduce "
-                       "a la ventana con un filtro de caja. Quita los dientes de sierra y el parpadeo de los detalles finos. "
-                       "Multiplica el trabajo de la tarjeta: x4 dibuja al doble de ancho y de alto."), false))
+                       "Supersampling anti-aliasing: the game is drawn with 2, 4, 8 or 16 times more pixels and "
+                       "reduced to the window with a box filter. It removes jaggies and the shimmering of fine "
+                       "detail. It multiplies the GPU's work: x4 draws at twice the width and height."), false))
             g_settings.supersample = ssv[si];
     }
-    opt_int("Nitidez", &g_settings.sharpness, 0, 10, 1, 0, "%d",
-            with_impact(IM_SHARP, "Afinado de la imagen final (AMD RCAS, el de FSR): de 1 a 10, el máximo. Útil con "
-                                  "supersampling o al ampliar."),
-            "No");
-    opt_toggle("Negro puro", &g_settings.true_black, true, with_impact(IM_NONE,
-               "El etalonaje de color del juego deja el negro en un gris verdoso muy oscuro (1/255 de rojo y verde): se ve "
-               "en las pantallas de carga, a los lados de los vídeos en pantalla ancha y en las sombras más profundas, sobre "
-               "todo en OLED o con HDR. Activado, el negro es negro y lo demás apenas cambia (la interfaz y los vídeos, "
-               "nada). Desactivado: como en la consola."));
+    opt_int("Sharpness", &g_settings.sharpness, 0, 10, 1, 0, "%d",
+            with_impact(IM_SHARP, "Sharpening of the final image (AMD RCAS, the one in FSR): from 1 to 10, the "
+                                  "maximum. Useful with supersampling or when upscaling."),
+            "Off");
+    opt_toggle("True black", &g_settings.true_black, true, with_impact(IM_NONE,
+               "The game's color grading leaves black as a very dark greenish gray (1/255 of red and green): you see "
+               "it on loading screens, at the sides of widescreen movies and in the deepest shadows, above all on "
+               "OLED or with HDR. On, black is black and the rest barely changes (the interface and the movies, not "
+               "at all). Off: as on the console."));
     {
-        static const char *af[] = {"El del juego", "2x", "4x", "8x", "16x"};
+        static const char *af[] = {"Game default", "2x", "4x", "8x", "16x"};
         static const int afv[] = {0, 2, 4, 8, 16};
         int ai = 4;
         for (int i = 0; i < 5; i++) if (afv[i] == g_settings.aniso) ai = i;
-        if (opt_choice("Filtrado anisótropo", &ai, af, 5, 4,
-                       with_impact(IM_ANISO, "Texturas nítidas cuando se ven en ángulo (suelos, caminos). 16x apenas cuesta "
-                                             "en una tarjeta actual."), false))
+        if (opt_choice("Anisotropic filtering", &ai, af, 5, 4,
+                       with_impact(IM_ANISO, "Sharp textures when seen at an angle (floors, paths). 16x costs next to "
+                                             "nothing on a current GPU."), false))
             g_settings.aniso = afv[ai];
     }
     {
-        static const char *sw[] = {"En segundo plano", "Esperar", "Equilibrada"};
+        static const char *sw[] = {"In the background", "Wait", "Balanced"};
         int si = g_settings.shader_wait >= 0 && g_settings.shader_wait <= 2 ? g_settings.shader_wait : 2;
-        if (opt_choice("Compilación de shaders", &si, sw, 3, 2, with_impact(IM_SHADERS,
-                       "Cuando aparece algo nuevo, su shader se prepara (la primera vez; luego queda guardado). Equilibrada: "
-                       "espera como mucho 10 ms por imagen, así casi nada aparece tarde y no hay tirones largos. En segundo "
-                       "plano: sin esperas, lo nuevo puede faltar un instante. Esperar: nunca falta nada, a costa de algún "
-                       "tirón al entrar en una zona nueva."), false))
+        if (opt_choice("Shader compilation", &si, sw, 3, 2, with_impact(IM_SHADERS,
+                       "When something new appears, its shader is prepared (the first time; after that it stays "
+                       "saved). Balanced: waits at most 10 ms per frame, so almost nothing shows up late and there "
+                       "are no long hitches. In the background: no waiting, new things may be missing for an "
+                       "instant. Wait: nothing is ever missing, at the cost of a hitch or two when entering a new "
+                       "area."), false))
             g_settings.shader_wait = si;
     }
     {
-        static const char *td[] = {"Normal", "Alto", "Máximo"};
-        opt_choice("Detalle de texturas", &g_settings.tex_detail, td, 3, 0, with_impact(IM_TEXDETAIL,
-                   "Usa una versión más detallada de cada textura a distancia (un nivel de mipmap más fino). Más nítido; "
-                   "a costa de algo de centelleo en detalles finos, que el supersampling quita. Va bien con supersampling."),
+        static const char *td[] = {"Normal", "High", "Maximum"};
+        opt_choice("Texture detail", &g_settings.tex_detail, td, 3, 0, with_impact(IM_TEXDETAIL,
+                   "Uses a more detailed version of each texture at a distance (a finer mipmap level). Sharper, at "
+                   "the cost of some shimmering on fine detail, which supersampling removes. Goes well with "
+                   "supersampling."),
                    false);
     }
-    opt_toggle("Texturas HD", &g_settings.tex_pack, true, with_impact(IM_TEXHD,
-               "Usa las texturas de la carpeta «texturas» (junto a los guardados) en lugar de las del juego: un PNG por "
-               "textura, llamado como su volcado (al menos la huella de 16 cifras del principio del nombre), del mismo "
-               "aspecto y igual o más grande (por ejemplo, ampliado x2 o x4 con una IA). La carpeta se lee al abrir el "
-               "juego; cada textura cambia la próxima vez que el juego la carga."));
-    opt_toggle("Volcar texturas", &g_settings.tex_dump, false, with_impact(IM_TEXDUMP,
-               "Guarda cada textura nueva que carga el juego en la carpeta «texturas-volcadas» (junto a los guardados), "
-               "en PNG con su huella en el nombre: la base para hacer texturas HD. Ralentiza un poco las cargas mientras "
-               "está activado."));
+    opt_toggle("HD textures", &g_settings.tex_pack, true, with_impact(IM_TEXHD,
+               "Uses the textures in the \"textures\" folder (next to the saves) instead of the game's: one PNG per "
+               "texture, named like its dump (at least the 16-digit hash at the start of the name), with the same "
+               "aspect ratio and the same size or larger (for example, enlarged x2 or x4 with an AI). The folder is "
+               "read when the game opens; each texture changes the next time the game loads it."));
+    opt_toggle("Dump textures", &g_settings.tex_dump, false, with_impact(IM_TEXDUMP,
+               "Saves each new texture the game loads in the \"textures-dump\" folder (next to the saves), as a PNG "
+               "with its hash in the name: the starting point for HD textures. Slows loading down a little while it "
+               "is on."));
 
-#ifndef __ANDROID__  // (SMRPG Android: sin HDR; el texto y la activación son de Windows)
+#ifndef __ANDROID__  // (SMRPG Android: no HDR; the text and the activation are Windows-specific)
     opt_section("HDR");
     {
         bool offered = false, on = renderer_hdr_state(&offered);
         char d[420];
-        snprintf(d, sizeof d, "Salida HDR10 para pantallas HDR. La imagen del juego es SDR: se pasa a HDR con el brillo de "
-                              "abajo y, si quieres, con las luces realzadas. Ahora: %s.",
-                 on ? "HDR10 activo" : g_settings.hdr ? "tu pantalla no ofrece HDR (activa «Usar HDR» en Configuración > "
-                                                         "Pantalla de Windows)" : offered ? "SDR" : "SDR");
+        snprintf(d, sizeof d, tr("HDR10 output for HDR displays. The game's image is SDR: it is converted to HDR with "
+                              "the brightness below and, if you like, with the highlights boosted. Now: %s."),
+                 on ? tr("HDR10 active") : g_settings.hdr ? tr("your display does not offer HDR (turn on \"Use HDR\" in "
+                                                         "Windows Settings > Display)") : offered ? "SDR" : "SDR");
         opt_toggle("HDR", &g_settings.hdr, false, with_impact(IM_HDR, d));
         if (!g_settings.hdr) opt_disable_next();
-        opt_int("Blanco de papel", &g_settings.hdr_paper, 80, 400, 10, 200, "%d nits",
-                "Lo brillante que se ve el blanco normal del juego (la interfaz, los cielos). 200 es lo habitual.");
+        opt_int("Paper white", &g_settings.hdr_paper, 80, 400, 10, 200, "%d nits",
+                "How bright the game's normal white looks (the interface, the skies). 200 is the usual value.");
         if (!g_settings.hdr) opt_disable_next();
-        opt_int("Brillo máximo", &g_settings.hdr_peak, 400, 2000, 50, 1000, "%d nits",
-                "El pico de tu pantalla: hasta ahí se realzan las luces.");
+        opt_int("Peak brightness", &g_settings.hdr_peak, 400, 2000, 50, 1000, "%d nits",
+                "Your display's peak: highlights are boosted up to it.");
         if (!g_settings.hdr) opt_disable_next();
-        opt_int("Realce de luces", &g_settings.hdr_boost, 0, 10, 1, 5, "%d",
-                "Cuánto se realzan las partes más brillantes (fuego, cielo, destellos) hacia el brillo máximo. 0: el juego "
-                "tal cual, solo más luminoso.", "No");
+        opt_int("Highlight boost", &g_settings.hdr_boost, 0, 10, 1, 5, "%d",
+                "How much the brightest parts (fire, sky, glints) are boosted toward the peak brightness. 0: the game "
+                "as it is, just brighter.", "Off");
     }
 #endif
-    {   // el recuadro de la descripción: el medidor arriba, los botones abajo (con su línea de estado)
+    {   // the description pane: the meter at the top, the buttons at the bottom (with their status line)
         float fs = ImGui::GetFontSize();
         opt_pane_header(meter_header, NULL);
         opt_pane_footer(buttons_footer, NULL, fs * 1.75f + fs * 0.62f * 1.2f + fs * 0.45f);
@@ -1461,7 +1477,7 @@ static void tab_display(void) {
     bool fs = g_settings.fullscreen;
     if (opt_toggle("Fullscreen", &fs, false, "Fills the screen. Also: F11, Alt+Enter or Cmd+Ctrl+F.")) {
         g_settings.fullscreen = fs;
-        g_settings.window_mode = fs ? WIN_BORDERLESS : WIN_WINDOW;  // (SMRPG: el modo de pantalla)
+        g_settings.window_mode = fs ? WIN_BORDERLESS : WIN_WINDOW;  // (SMRPG: the display mode)
         g_want_fullscreen_apply.store(true);
     }
     opt_toggle("Show FPS", &g_settings.show_fps, false, "Shows the frame rate in the top right corner.");
@@ -1585,16 +1601,16 @@ static void tab_cosmetics(void) {
 }
 
 static void tab_audio(void) {
-    if (!g_game_las) {  // (SMRPG: el volumen; la reverberación y el audio de los vídeos eran de Link's Awakening)
+    if (!g_game_las) {  // (SMRPG: the volume; the reverb and the movie audio were Link's Awakening's)
         opt_begin("##audio", ImGui::GetFontSize() / 34);
-        opt_section("Sonido");
+        opt_section("Sound");
         float pct = roundf(g_settings.volume * 100);
-        if (opt_slider("Volumen", &pct, 0, 200, 5, 100, "%g%%",
-                       "El volumen del juego. 100 % es el suyo; por encima, más alto."))
+        if (opt_slider("Volume", &pct, 0, 200, 5, 100, "%g%%",
+                       "The game's volume. 100% is its own; above that, louder."))
             g_settings.volume = pct / 100.0f;
-        opt_section("Ajustes");
+        opt_section("Settings");
         if (g_settings.volume == g_settings_defaults.volume) opt_disable_next();
-        if (opt_action("Restablecer audio", "", "Pone el volumen como viene (100 %)."))
+        if (opt_action("Reset audio", "", "Puts the volume back to its default (100%)."))
             settings_reset_audio();
         opt_end();
         return;
@@ -1619,31 +1635,31 @@ static void tab_quit(float scale, bool in_game) {
     static int ask;  // 0: the two choices; 1: start screen?; 2: desktop?
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
         ask = 0;
-    if (!g_game_las) {  // (SMRPG: solo al escritorio; la pantalla de inicio es el lanzador de Link's Awakening)
+    if (!g_game_las) {  // (SMRPG: only to the desktop; the start screen is Link's Awakening's launcher)
         opt_begin("##quit", scale);
-        opt_section("Salir");
-        const char *d = "Cierra " APP_NAME ". Lo que no se haya guardado se pierde (el juego se autoguarda al cambiar de zona).";
+        opt_section("Quit");
+        const char *d = "Closes " APP_NAME ". Anything not saved is lost (the game autosaves when you change areas).";
         if (!ask) {
             restart_rows();
 #ifdef __ANDROID__
-            if (opt_action("Salir del juego", "", d)) ask = 2;  // (SMRPG Android: no hay escritorio)
+            if (opt_action("Quit game", "", d)) ask = 2;  // (SMRPG Android: there is no desktop)
 #else
-            if (opt_action("Salir al escritorio", "", d)) ask = 2;
+            if (opt_action("Quit to desktop", "", d)) ask = 2;
 #endif
-            opt_section("Acerca de");
-            opt_action("Versión", APP_VERSION,
-                       APP_NAME " " APP_VERSION ". Numeración x.y.z (Semantic Versioning): la z sube con los arreglos, la y con "
-                       "lo nuevo y la x con lo que rompe lo de antes; alfa: aún no se juega entero, beta: se juega entero y "
-                       "se sigue probando.");
+            opt_section("About");
+            opt_action("Version", APP_VERSION,
+                       APP_NAME " " APP_VERSION ". Numbering x.y.z (Semantic Versioning): z goes up with fixes, y "
+                       "with new things and x with what breaks earlier ones; alpha: not playable from start to "
+                       "finish yet; beta: playable from start to finish and still being tested.");
         } else {
-            if (opt_action("Sí, salir", "", d)) {
+            if (opt_action("Yes, quit", "", d)) {
                 settings_save();
                 SDL_Event q = {};
                 q.type = SDL_EVENT_QUIT;
                 SDL_PushEvent(&q);
                 ask = 0;
             }
-            if (opt_action("Cancelar", "", "Vuelve al juego.")) ask = 0;
+            if (opt_action("Cancel", "", "Back to the game.")) ask = 0;
         }
         opt_end();
         return;
@@ -1831,15 +1847,19 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
     static const char *names[] = {"Video", "Audio", "Save Editor", "Randomizer", "Warp", "Cheats", "Gameplay",
                                   "Cosmetics", "Controls", "Quit"};
-    static const int order[] = {8, 0, 1, 6, 7, 3, 5, 4, 2, 9};  // Controls, Video, Audio, Gameplay, Cosmetics, Randomizer,
-                                                                // Cheats, Warp, Save Editor, Quit (ids stay: test hooks)
-    // (SMRPG) solo lo que vale para Super Mario RPG: el resto (editor de partidas, aleatorizador, saltos, trucos,
-    // jugabilidad, cosméticos) es de Link's Awakening y lee sus direcciones
-    static const char *names_smrpg[] = {"Vídeo", "Audio", "", "", "", "", "", "", "Controles", "Salir"};
+    static const int order[] = {8, 0, 1, 6, 7, 3, 5, 4, 2, 9};  // Controls, Video, Audio, Gameplay, Cosmetics,
+                                                                // Randomizer,
+                                                                // Cheats, Warp, Save Editor, Quit (ids stay: test
+                                                                // hooks)
+                                                                // (SMRPG) only what applies to Super Mario RPG: the
+                                                                // rest (save editor, randomizer, warps, cheats,
+                                                                // gameplay, cosmetics) is Link's Awakening's and reads
+                                                                // its addresses
+    static const char *names_smrpg[] = {"Video", "Audio", "", "", "", "", "", "", "Controls", "Quit"};
     static const int order_smrpg[] = {8, 0, 1, 9};
     if (!g_game_las) {
         for (int i : order_smrpg)
-            if (i != 9 || !prelaunch) tabs[ntabs++] = {names_smrpg[i], i, true};
+            if (i != 9 || !prelaunch) tabs[ntabs++] = {tr(names_smrpg[i]), i, true};
     } else
     for (int i : order)  // (Quit: in game only - the start screen has its own QUIT, and an eleventh tab cut names short)
         if (i != 9 || !prelaunch) tabs[ntabs++] = {names[i], i, in_game || (i != 2 && i != 4 && i != 5)};
@@ -2069,9 +2089,9 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     drain_events(io);
     // fonts are built at 34/56 px for a ~1080 px tall output; scale to the window
     float scale = (float)(th / 1080.0);
-    {   // (SMRPG Android) una pantalla de consola o de teléfono es pequeña para su resolución (la de la AYN Thor: 6", 1080p;
-        // a 34 px el texto medía ~2,3 mm): el menú, 1,25 veces mayor y a todo el ancho (así cabe lo mismo que en el PC: a
-        // 1,5 los nombres y los valores de Vídeo se montaban). LARECOMP_UI_SCALE=<factor> lo cambia (también en el PC)
+    {   // (SMRPG Android) a handheld or phone screen is small for its resolution (the AYN Thor's: 6", 1080p; at 34 px
+        // the text measured ~2.3 mm): the menu, 1.25 times larger and full width (that way as much fits as on PC: at
+        // 1.5 the Video names and values overlapped). LARECOMP_UI_SCALE=<factor> changes it (on PC too)
         static float ui_k = -1;
         if (ui_k < 0) {
             const char *e = getenv("LARECOMP_UI_SCALE");
@@ -2114,8 +2134,8 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         ImGui::Begin("##fps", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
         double f = g_ov_cache ? g_fps_shown : io.Framerate;
-        // (SMRPG) con la generación de fotogramas, también lo que se ve: el doble
-        if (vk_fg_generating()) ImGui::Text("%.0f fps (%.0f con generación)", f, 2 * f);
+        // (SMRPG) with frame generation, also what is displayed: double
+        if (vk_fg_generating()) ImGui::Text(tr("%.0f fps (%.0f with generation)"), f, 2 * f);
         else ImGui::Text("%.0f fps", f);
         ImGui::End();
     }
@@ -2134,7 +2154,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
         float w = fminf(io.DisplaySize.x * 0.9f, 1500 * scale), h = io.DisplaySize.y - 2 * 18 * scale;  // (all the height: a slim margin)
 #ifdef __ANDROID__
-        w = fminf(io.DisplaySize.x - 2 * 18 * scale, 1500 * scale);  // (SMRPG Android: el ancho entero, con el mismo margen)
+        w = fminf(io.DisplaySize.x - 2 * 18 * scale, 1500 * scale);  // (SMRPG Android: the full width, with the same margin)
 #endif
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
@@ -2145,7 +2165,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         // header as on the start screen's Settings: the title, and a close X in the corner (B / Esc too). ("Title
         // screen" - rt_request_reboot(RT_REBOOT_TITLE) - is to find a new home; user 2026-10-11.)
         ImGui::PushFont(g_font_big);
-        ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", g_game_las ? "Settings" : "Ajustes");
+        ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", tr("Settings"));
         ImGui::PopFont();
         {
             float bx = 44 * scale;

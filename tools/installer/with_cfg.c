@@ -1,5 +1,5 @@
-// con_cfg.exe <programa> [argumentos...]: lo arranca con Control Flow Guard FORZADO por la directiva del proceso (como
-// cuando Windows lo impone a todos los programas, #337 de LAS Recomp), espera y dice cómo terminó.
+// with_cfg.exe <program> [arguments...]: starts it with Control Flow Guard FORCED by the process policy (as when
+// Windows forces it on every program, LAS Recomp #337), waits and says how it ended.
 #include <stdio.h>
 #include <wchar.h>
 #include <windows.h>
@@ -23,7 +23,7 @@ int wmain(int argc, wchar_t **argv) {
     DWORD64 pol = CFG_ALWAYS_ON;
     if (!InitializeProcThreadAttributeList(al, 1, 0, &sz) ||
         !UpdateProcThreadAttribute(al, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &pol, sizeof pol, NULL, NULL)) {
-        printf("atributos: error %lu\n", GetLastError());
+        printf("attributes: error %lu\n", GetLastError());
         return 2;
     }
     STARTUPINFOEXW si;
@@ -38,6 +38,6 @@ int wmain(int argc, wchar_t **argv) {
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
-    printf("con_cfg: terminó con 0x%08lX (%lu)%s\n", code, code, code == 0xC0000409 ? " = fallo de seguridad (CFG)" : "");
+    printf("with_cfg: ended with 0x%08lX (%lu)%s\n", code, code, code == 0xC0000409 ? " = security failure (CFG)" : "");
     return 0;
 }

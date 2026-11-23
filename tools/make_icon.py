@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# El icono de SMRPG Recomp (docs/icon/icon.ico y icon_512.png), sin dependencias: un cuadrado redondeado
-# con un degradado índigo, un halo, una estrella dorada de 5 puntas con contorno y dos destellos. Supermuestreo 4x4
-# (2x2 en la vista previa grande). El .ico lleva entradas PNG (Windows Vista en adelante).
-# Uso: python tools/make_icon.py  (desde la carpeta del repositorio)
+# The icon of SMRPG Recomp (docs/icon/icon.ico and icon_512.png), without dependencies: a rounded square with an indigo
+# gradient, a halo, a golden 5-pointed star with an outline and two sparkles. 4x4 supersampling (2x2 in the large
+# preview). The .ico has PNG entries (Windows Vista and newer).
+# Usage: python tools/make_icon.py  (from the repository's folder)
 import math, os, struct, zlib
 
 def star(cx, cy, R, r, n=5, rot=-math.pi / 2):
@@ -38,15 +38,15 @@ SHINE = hexc('#fffbe0')
 WHITE = (1.0, 1.0, 1.0)
 
 def shade(u, v, shapes):
-    # u, v en [0, 1]: el color (r, g, b, a) del punto
-    # fondo: cuadrado redondeado (radio 0.2)
+    # u, v in [0, 1]: the point's color (r, g, b, a)
+    # background: a rounded square (radius 0.2)
     rr = 0.2
     dx = max(abs(u - 0.5) - (0.5 - rr), 0)
     dy = max(abs(v - 0.5) - (0.5 - rr), 0)
     if dx * dx + dy * dy > rr * rr:
         return (0, 0, 0, 0)
     col = lerp(BG_TOP, BG_BOT, v)
-    d = math.hypot(u - 0.5, v - 0.53)  # halo detrás de la estrella
+    d = math.hypot(u - 0.5, v - 0.53)  # the halo behind the star
     g = max(0.0, 1 - d / 0.42) ** 2 * 0.55
     col = lerp(col, GLOW, g)
     outline, body, sparkles = shapes
@@ -54,7 +54,7 @@ def shade(u, v, shapes):
         col = OUTLINE
     if inside(body, u, v):
         col = lerp(GOLD_TOP, GOLD_BOT, min(1.0, max(0.0, (v - 0.22) / 0.62)))
-        # brillo: una banda clara arriba a la izquierda
+        # shine: a light band at the top left
         if (u - 0.40) * 0.6 + (v - 0.34) < 0.0 and v < 0.52:
             col = lerp(col, SHINE, 0.45)
     for sp in sparkles:
@@ -106,7 +106,7 @@ def main():
     p512 = png(512, render(512, 2))
     open(os.path.join(out, 'icon_512.png'), 'wb').write(p512)
     open(os.path.join(out, 'icon.svg'), 'w', encoding='utf-8').write(svg())
-    # (los de los paquetes de macOS y Linux heredados de LAS Recomp: icon_1024.png e icon.icns, con PNG dentro)
+    # (the ones of the macOS and Linux packages inherited from LAS Recomp: icon_1024.png and icon.icns, with PNG inside)
     p1024 = png(1024, render(1024, 2))
     open(os.path.join(out, 'icon_1024.png'), 'wb').write(p1024)
     ents = [(b'ic09', p512), (b'ic10', p1024)]
@@ -114,7 +114,7 @@ def main():
     open(os.path.join(out, 'icon.icns'), 'wb').write(b'icns' + struct.pack('>I', 8 + len(body)) + body)
     print('docs/icon/icon.ico (%d sizes), icon_512.png, icon_1024.png, icon.icns, icon.svg' % len(sizes))
 
-def svg():  # (la misma figura en vectorial, 1024 x 1024)
+def svg():  # (the same shape as vectors, 1024 x 1024)
     def pts(p):
         return ' '.join('%.1f,%.1f' % (x * 1024, y * 1024) for x, y in p)
     return '''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">

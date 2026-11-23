@@ -2,7 +2,7 @@
 #include "app_name.h"
 #include <SDL3/SDL.h>
 #ifdef __ANDROID__
-#include <SDL3/SDL_main.h>   // (SMRPG Android: main pasa a ser SDL_main, la que llama SDLActivity)
+#include <SDL3/SDL_main.h>   // (SMRPG Android: main becomes SDL_main, the one SDLActivity calls)
 void android_prepare(void);  // runtime/platform/android.c
 #endif
 #include <stdbool.h>
@@ -13,6 +13,7 @@ void android_prepare(void);  // runtime/platform/android.c
 #include "gamelib.h"
 #include "paths.h"
 #include "settings.h"
+#include "ui/tr.h"
 #include "hle.h"
 #include "kernel.h"
 #include "rando.h"
@@ -174,15 +175,15 @@ static void boot(const char *root) {
     { extern void settings_load(void); settings_load(); }
     kernel_init();
     dispatch_init();
-    { extern void smrpg_movie_fit_init(void); smrpg_movie_fit_init(); }  // (SMRPG: hle/movie_fit.c, antes de que corra)
+    { extern void smrpg_movie_fit_init(void); smrpg_movie_fit_init(); }  // (SMRPG: hle/movie_fit.c, before it runs)
 
     uint32_t stack_size = 0x100000;
     int prio = 44;
     uint64_t program_id = 0, system_resource = 0;
     FILE *f = fopen(npdm_path, "rb");
     if (f) {
-        // SMRPG: además de la prioridad y la pila del hilo principal, el «system resource» (+0x14, activa la memoria
-        // virtual de nn::os) y el ID de programa del ACI0 (+0x10), para GetInfo.
+        // SMRPG: besides the main thread's priority and stack, the "system resource" (+0x14, enables nn::os's virtual
+        // memory) and the ACI0's program ID (+0x10), for GetInfo.
         static uint8_t npdm[0x4000];
         size_t n = fread(npdm, 1, sizeof npdm, f);
         if (n >= 0x80 && !memcmp(npdm, "META", 4)) {
@@ -229,11 +230,11 @@ static void log_startup_info(void) {
             si.cpu[0] ? si.cpu : "unknown CPU", cores, ram, si.package ? ", " : "", si.package ? si.package : "");
 }
 
-// (SMRPG) --build-game <carpeta de los archivos del juego>: el instalador (tools/instalador) construye aquí el código
-// del juego, sin ventana: gamebuild_run (el generador lasgen y el compilador zig que van con el programa, como en la
-// pantalla de inicio de LASRecomp) con su avance en la salida estándar, una línea cada vez que cambia una milésima o el
-// paso: "progreso <0..1> <paso>"; al final "listo" (código 0) o "error <por qué>" (código 1). Compiladores a la vez:
-// los núcleos lógicos, sin pasar de los GB de RAM menos 2 (como la pantalla de inicio); LARECOMP_BUILD_JOBS los fija.
+// (SMRPG) --build-game <game files folder>: the installer (tools/installer) builds the game code here, without a
+// window: gamebuild_run (the lasgen generator and the zig compiler that ship with the program, as in LASRecomp's start
+// screen) with its progress on standard output, one line every time a thousandth or the step changes: "progress <0..1>
+// <step>"; at the end "done" (code 0) or "error <why>" (code 1). Concurrent compilers: the logical cores, but no more
+// than the GB of RAM minus 2 (like the start screen); LARECOMP_BUILD_JOBS sets them.
 #include "gamebuild.h"
 static void build_cli_progress(double f, const char *step) {
     static int last = -1;
@@ -242,43 +243,43 @@ static void build_cli_progress(double f, const char *step) {
     if (k == last && !strcmp(step, last_step)) return;
     last = k;
     snprintf(last_step, sizeof last_step, "%s", step);
-    printf("progreso %.3f %s\n", f, step);
+    printf("progress %.3f %s\n", f, step);
     fflush(stdout);
 }
 static int build_game_cli(const char *game_dir) {
     int cores = SDL_GetNumLogicalCPUCores(), ram_gb = SDL_GetSystemRAM() / 1024;
     int jobs = cores < ram_gb - 2 ? cores : ram_gb - 2 > 1 ? ram_gb - 2 : 1;
     if (getenv("LARECOMP_BUILD_JOBS") && atoi(getenv("LARECOMP_BUILD_JOBS")) > 0) jobs = atoi(getenv("LARECOMP_BUILD_JOBS"));
-    LOG("[gamebuild] desde el instalador: %s, %d compiladores a la vez\n", game_dir, jobs);
+    LOG("[gamebuild] from the installer: %s, %d compilers at a time\n", game_dir, jobs);
     GameBuildOpts o = {build_cli_progress, jobs, NULL};
     char why[256] = "";
     if (!gamebuild_run(game_dir, &o, why, sizeof why)) {
-        printf("error %s%s\n", why, gamebuild_cfg_stopped() ? " (la protección contra vulnerabilidades de Windows, "
-                                                               "«Control Flow Guard», paró el generador)"
-                                 : gamebuild_killed() ? " (el sistema paró un compilador: falta memoria)" : "");
+        printf("error %s%s\n", why, gamebuild_cfg_stopped() ? " (Windows exploit protection, \"Control Flow Guard\", "
+                                                               "stopped the generator)"
+                                 : gamebuild_killed() ? " (the system killed a compiler: not enough memory)" : "");
         fflush(stdout);
         return 1;
     }
-    printf("listo\n");
+    printf("done\n");
     fflush(stdout);
     return 0;
 }
 
 int main(int argc, char **argv) {
 #ifdef __ANDROID__
-    android_prepare();  // (las carpetas de la app, los recursos, el código del juego: antes de todo lo demás)
+    android_prepare();  // (the app's folders, the resources, the game code: before everything else)
 #endif
     plat_init();
     log_startup_info();
     for (int i = 1; i + 1 < argc; i++)
         if (!strcmp(argv[i], "--build-game")) {
             static char dir[1024];
-            if (!realpath(argv[i + 1], dir)) {  // (antes de rt_paths_init: la ruta es relativa a donde se empezó)
-                printf("error no existe la carpeta %s\n", argv[i + 1]);
+            if (!realpath(argv[i + 1], dir)) {  // (before rt_paths_init: the path is relative to where we started)
+                printf("error the folder %s does not exist\n", argv[i + 1]);
                 return 1;
             }
             rt_paths_init();
-            setvbuf(stderr, NULL, _IONBF, 0);  // (el registro línea a línea, como en el arranque normal)
+            setvbuf(stderr, NULL, _IONBF, 0);  // (the log line by line, as in a normal launch)
             return build_game_cli(dir);
         }
     if (getenv("LARECOMP_REEXEC")) {  // (reserve_guest_space started this process again)
@@ -309,9 +310,9 @@ int main(int argc, char **argv) {
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
     const char *fl = getenv("LARECOMP_FORCE_LAUNCHER");
     if (!g_game_las && !(fl && *fl && strcmp(fl, "0"))) {
-        // (SMRPG) directo al juego, también sin --play (un doble clic en smrpg-recomp.exe): la pantalla de inicio es la de
-        // Link's Awakening. Si faltan los archivos del juego o su código (una instalación a medias, otra versión), un
-        // aviso que dice qué hacer en vez de un error técnico.
+        // (SMRPG) straight to the game, also without --play (a double click on smrpg-recomp.exe): the start screen is
+        // Link's Awakening's. If the game's files or its code are missing (a half-finished installation, another
+        // version), a notice that says what to do instead of a technical error.
         skip_launcher = true;
         char m[1100];
         snprintf(m, sizeof m, "%s/exefs/main", root);
@@ -320,16 +321,16 @@ int main(int argc, char **argv) {
         if (f) fclose(f);
         if (!files || !gamelib_present(root)) {
             LOG("[main] %s: %s\n", root, !files ? "no game files" : "no game code library for them");
-            // (el cuadro, solo al abrirlo con doble clic o el acceso directo: sin consola ni registro heredado, como
-            // plat_fatal_notice; una prueba con su registro redirigido sale enseguida con el código 3)
+            // (the message box, only when opened with a double click or the shortcut: no console or inherited log, like
+            // plat_fatal_notice; a test with its log redirected exits right away with code 3)
             if (!no_launcher && getenv("LASRECOMP_LOG_FILE"))
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, APP_NAME,
-                                         !files ? "No están los archivos del juego (la carpeta extracted). Ejecuta el instalador de "
-                                                  APP_NAME " y elige esta carpeta."
-                                                : "Falta el código del juego construido en este PC (extracted\\lasgame.dll), es "
-                                                  "de otra versión del programa o se construyó en otro PC con otra CPU. Ejecuta "
-                                                  "el instalador de " APP_NAME " y elige esta misma carpeta: lo vuelve a "
-                                                  "construir para este PC.",
+                                         !files ? tr("The game's files are missing (the \"extracted\" folder). Run the "
+                                                     APP_NAME " installer and choose this folder.")
+                                                : tr("The game code built on this PC is missing (extracted\\lasgame.dll), "
+                                                     "belongs to another version of the program or was built on a PC with "
+                                                     "another CPU. Run the " APP_NAME " installer and choose this same folder: "
+                                                     "it will build it again for this PC."),
                                          NULL);
             return 3;
         }

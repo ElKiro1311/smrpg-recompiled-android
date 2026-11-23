@@ -16,7 +16,7 @@ typedef struct __attribute__((aligned(16))) Cpu {
     void *thread;            // 312: runtime thread object
     uint64_t fpcr;           // 320: guest FPCR/FPSR (portable FP/SIMD lowering only; the asm path uses the host's)
     uint64_t fpsr;           // 328
-    uint64_t excl_val_hi;    // 336: la mitad alta de lo que leyó un LDXP (par exclusivo de 64 bits)
+    uint64_t excl_val_hi;    // 336: the high half of what an LDXP read (64-bit exclusive pair)
     uint8_t _pad[512 - 344];
     __uint128_t v[32];       // 512
 } Cpu;
@@ -89,11 +89,11 @@ void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0);
         return !__atomic_compare_exchange_n((T *)(uintptr_t)a, &expected, (T)v, 0,         \
                                             __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);           \
     }                                                                                      \
-    /* SMRPG: LDAR/STLR de AArch64 son RCsc: un STLR y un LDAR (o una carga tras él) posteriores quedan ordenados. */ \
-    /* Así compila el C++ sus atómicos seq_cst. Con release/acquire, en x86 una carga puede adelantarse a la        */ \
-    /* escritura anterior (store buffer) y los handshakes tipo Dekker de Unity (ThreadedStreamBuffer entre el hilo  */ \
-    /* principal y UnityGfxDeviceWorker) pierden el despertar: los dos lados se dormían a la vez. seq_cst: la        */ \
-    /* escritura es un xchg (barrera completa) en x86.                                                               */ \
+    /* SMRPG: AArch64's LDAR/STLR are RCsc: an STLR and a later LDAR (or a load after it) stay ordered. */ \
+    /* This is how C++ compiles its seq_cst atomics. With release/acquire, on x86 a load can move ahead of the */ \
+    /* earlier store (store buffer) and Unity's Dekker-style handshakes (ThreadedStreamBuffer between the main */ \
+    /* thread and UnityGfxDeviceWorker) lose the wakeup: both sides went to sleep at the same time. seq_cst: the */ \
+    /* store is an xchg (full barrier) on x86.                                                               */ \
     static inline uint64_t lda##N(uint64_t a) {                                            \
         return __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_SEQ_CST);                       \
     }                                                                                      \
@@ -105,9 +105,9 @@ EXCL(16, uint16_t)
 EXCL(32, uint32_t)
 EXCL(64, uint64_t)
 
-// ---- par exclusivo (LDXP/LDAXP, STXP/STLXP). SMRPG (Unity/IL2CPP) hace atómicos de 128 bits con pares de 64: el
-// STXP es un compare-and-swap de 16 bytes (x86-64: cmpxchg16b, en x86-64-v3) contra lo que leyó el LDXP. Los pares de
-// 32 bits caben en el monitor de 64. En la CPU de la Switch la dirección de un par está alineada a su tamaño.
+// ---- exclusive pair (LDXP/LDAXP, STXP/STLXP). SMRPG (Unity/IL2CPP) does 128-bit atomics with pairs of 64: the STXP is
+// a 16-byte compare-and-swap (x86-64: cmpxchg16b, in x86-64-v3) against what the LDXP read. 32-bit pairs fit in the
+// 64-bit monitor. On the Switch's CPU a pair's address is aligned to its size.
 static inline void ldxp64(Cpu *c, uint64_t a, uint64_t *lo, uint64_t *hi) {
     __uint128_t v = __atomic_load_n((__uint128_t *)(uintptr_t)a, __ATOMIC_ACQUIRE);
     c->excl_addr = a;

@@ -624,7 +624,7 @@ static void wav_header(FILE *f, uint32_t bytes) {
 }
 
 static void *renderer_tick(void *arg) {
-    plat_thread_name("audio-ren");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("audio-ren");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     Renderer *r = arg;
     float out[2 * 4096];
     uint32_t N = r->sample_count > 4096 ? 4096 : r->sample_count;
@@ -1040,7 +1040,7 @@ typedef struct AudioOut {
     KEvent *event;
     uint64_t played;
     pthread_mutex_t lock;
-    pthread_cond_t cond;  // (0.8.8: sin búferes el hilo espera aquí, no sondeando cada 1 ms)
+    pthread_cond_t cond;  // (0.8.8: with no buffers the thread waits here instead of polling every 1 ms)
     pthread_t thread;
     volatile bool quit;  // reboot (audio_reset)
 } AudioOut;
@@ -1062,7 +1062,7 @@ static void audio_track(Renderer *r, AudioOut *a) {
 static void audout_free(AudioOut *a) {
     pthread_mutex_lock(&a->lock);
     a->quit = true;
-    pthread_cond_signal(&a->cond);  // (0.8.8: despertar al que espera en la cola, o el join no vuelve)
+    pthread_cond_signal(&a->cond);  // (0.8.8: wake whoever is waiting on the queue, or the join never returns)
     pthread_mutex_unlock(&a->lock);
     pthread_join(a->thread, NULL);
     if (a->stream) SDL_DestroyAudioStream(a->stream);
@@ -1104,10 +1104,10 @@ RT_ON_RESET(audio_reset) {
     LOG("[audio] reboot: %d outputs closed\n", n);
 }
 
-// Buffers are copied into an SDL stream and released once the stream has drained below its target, so the
-// stream plays the role of the hardware queue. Without a device, buffers are released in real time.
-// (0.8.8) El hilo de salida espera en la cola (pthread_cond_wait); Start/Stop también lo despiertan, para que
-// decida de nuevo con el estado nuevo (búferes quedados al parar, arranque con la cola llena...).
+// Buffers are copied into an SDL stream and released once the stream has drained below its target, so the stream plays
+// the role of the hardware queue. Without a device, buffers are released in real time.
+// (0.8.8) The output thread waits on the queue (pthread_cond_wait); Start/Stop wake it too, so that it decides again
+// with the new state (buffers left over on a stop, a start with a full queue...).
 static void audout_wake(AudioOut *a) {
     pthread_mutex_lock(&a->lock);
     pthread_cond_signal(&a->cond);
@@ -1115,7 +1115,7 @@ static void audout_wake(AudioOut *a) {
 }
 
 static void *audout_thread(void *arg) {
-    plat_thread_name("audio-out");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("audio-out");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     AudioOut *a = arg;
     uint32_t ch = a->channels ? a->channels : 2;
     int target = 0;
@@ -1132,8 +1132,8 @@ static void *audout_thread(void *arg) {
         if (a->state == 0 && a->queued) { size = a->sizes[0]; tag = a->tags[0]; data = a->datas[0]; }
         pthread_mutex_unlock(&a->lock);
         if (!size) {
-            // (0.8.8) Sin nada que reproducir: esperar a que la cola traiga algo (o el cierre), no sondear cada 1 ms
-            // — sin sonido (LARECOMP_NO_AUDIO=1) este hilo gastaba despertando mil veces por segundo.
+            // (0.8.8) Nothing to play: wait for the queue to bring something (or for the shutdown), don't poll every 1
+            // ms - with no sound (LARECOMP_NO_AUDIO=1) this thread wasted cycles waking up a thousand times a second.
             pthread_mutex_lock(&a->lock);
             while (!(a->state == 0 && a->queued) && !a->quit) pthread_cond_wait(&a->cond, &a->lock);
             pthread_mutex_unlock(&a->lock);
@@ -1176,8 +1176,8 @@ static void audio_out(Service *s, IpcReq *req, IpcResp *resp) {
     }
     switch (req->cmd) {
     case 0: OUT(uint32_t, 0) = a->state; resp_size(resp, 4); break;   // GetAudioOutState
-    case 1: a->state = 0; audout_wake(a); break;                   // Start  (0.8.8: el hilo puede esperar en ello)
-    case 2: a->state = 1; audout_wake(a); break;                   // Stop   (id.: con búferes quedados, que decida)
+    case 1: a->state = 0; audout_wake(a); break;                   // Start  (0.8.8: the thread may be waiting on it)
+    case 2: a->state = 1; audout_wake(a); break;                   // Stop   (ditto: with buffers left over, let it decide)
     case 3: case 7: {  // AppendAudioOutBuffer(tag) <- AudioOutBuffer {next, samples, capacity, size, offset}
         IpcBuf *b = in_buf(req, 0);
         uint64_t tag = IN(uint64_t, 0);
@@ -1196,7 +1196,7 @@ static void audio_out(Service *s, IpcReq *req, IpcResp *resp) {
             a->datas[a->queued] = size ? data : 0;
             a->queued++;
         }
-        pthread_cond_signal(&a->cond);  // (0.8.8: el hilo espera en la cola, no sondea)
+        pthread_cond_signal(&a->cond);  // (0.8.8: the thread waits on the queue, it doesn't poll)
         pthread_mutex_unlock(&a->lock);
         break;
     }

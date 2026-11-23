@@ -98,9 +98,9 @@ static void load_nso(Module *m, const char *path, uint64_t base) {
 static Elf64Sym *sym(Module *m, uint64_t i) { return (Elf64Sym *)m->symtab + i; }
 static const char *symname(Module *m, Elf64Sym *s) { return (const char *)(m->strtab + s->name); }
 
-// SMRPG: tabla global de símbolos (nombre → dirección) con la primera definición en orden de carga (main antes que
-// sdk), lo mismo que la búsqueda lineal de abajo pero en tiempo constante: la interposición (resolve) busca así cada
-// símbolo de cada reubicación (~32.000 en el sdk). Se rehace en cada carga, después de cargar todos los módulos.
+// SMRPG: global symbol table (name → address) with the first definition in load order (main before sdk), the same as
+// the linear search below but in constant time: interposition (resolve) looks up every symbol of every relocation this
+// way (~32,000 in the sdk). Rebuilt on every load, after all the modules are loaded.
 typedef struct { const char *name; uint64_t addr; } SymSlot;
 static SymSlot *g_symtab;
 static uint64_t g_symtab_mask;
@@ -116,7 +116,7 @@ static void symtab_build(void) {
     for (int mi = 0; mi < g_nmodules; mi++) n += g_modules[mi].nsyms;
     while (cap < n * 2) cap <<= 1;
     free(g_symtab);
-    if (!(g_symtab = calloc(cap, sizeof *g_symtab))) FATAL("sin memoria para la tabla de símbolos\n");
+    if (!(g_symtab = calloc(cap, sizeof *g_symtab))) FATAL("no memory for the symbol table\n");
     g_symtab_mask = cap - 1;
     for (int mi = 0; mi < g_nmodules; mi++) {
         Module *m = &g_modules[mi];
@@ -126,7 +126,7 @@ static void symtab_build(void) {
             const char *nm = (const char *)(m->strtab + s->name);
             uint64_t h = name_hash(nm) & g_symtab_mask;
             while (g_symtab[h].name && strcmp(g_symtab[h].name, nm)) h = (h + 1) & g_symtab_mask;
-            if (!g_symtab[h].name) g_symtab[h] = (SymSlot){nm, m->base + s->value};  // (si ya estaba, gana el anterior)
+            if (!g_symtab[h].name) g_symtab[h] = (SymSlot){nm, m->base + s->value};  // (already there: the first wins)
         }
     }
 }
@@ -180,16 +180,16 @@ const char *loader_symbol_at(uint64_t addr, uint64_t *offset) {
     return best;
 }
 
-static int interposed;  // (por módulo, para el registro) símbolos propios atados a la definición de otro módulo
+static int interposed;  // (per module, for the log) own symbols bound to another module's definition
 
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
-    // SMRPG: como el rtld de la Switch (y el ELF por defecto), un símbolo que el módulo define también se busca en todos
-    // los módulos en orden de carga, y gana la definición de main. Así el operator new/delete de Unity (globales en
-    // main) sustituyen también dentro del sdk a los débiles del SDK: antes el std::string del sdk liberaba con el heap
-    // del SDK memoria que había reservado el asignador de Unity, y CentralHeap::Free paraba el juego
-    // (nnmem_nlib_debug_break). Solo un símbolo local o de visibilidad no por defecto se ata a su propio módulo.
+    // SMRPG: like the Switch's rtld (and ELF by default), a symbol the module defines is also looked up in all the
+    // modules in load order, and main's definition wins. That way Unity's operator new/delete (global in main) also
+    // replace the SDK's weak ones inside the sdk: before, the sdk's std::string used the SDK's heap to free memory that
+    // Unity's allocator had allocated, and CentralHeap::Free stopped the game (nnmem_nlib_debug_break). Only a local
+    // symbol or one with non-default visibility binds to its own module.
     if (s->shndx) {
         uint64_t own = m->base + s->value;
         if ((s->info >> 4) == 0 || (s->other & 3)) return own;
@@ -247,14 +247,14 @@ void loader_load(const char *exefs) {
         m->name = mods[i].name;
         snprintf(path, sizeof path, "%s/%s", exefs, m->name);
         load_nso(m, path, mods[i].base);
-        // SMRPG: un módulo no puede empezar dentro del anterior (imagen + .bss): el sdk de LAS en 0x7004000000 caía
-        // dentro del main de SMRPG y sus globales se pisaban sin ningún aviso.
+        // SMRPG: a module cannot start inside the previous one (image + .bss): LAS's sdk at 0x7004000000 fell inside
+        // SMRPG's main and their globals overwrote each other without any warning.
         if (i > 0 && g_modules[g_nmodules - 2].base + g_modules[g_nmodules - 2].size > m->base)
-            FATAL("los módulos se solapan: %s acaba en %llx y %s empieza en %llx (runtime/rt.h SDK_BASE)",
+            FATAL("the modules overlap: %s ends at %llx and %s starts at %llx (runtime/rt.h SDK_BASE)",
                   g_modules[g_nmodules - 2].name,
                   (unsigned long long)(g_modules[g_nmodules - 2].base + g_modules[g_nmodules - 2].size), m->name,
                   (unsigned long long)m->base);
     }
-    symtab_build();  // (SMRPG: con todos los módulos cargados, antes de reubicar)
+    symtab_build();  // (SMRPG: with all the modules loaded, before relocating)
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
 }

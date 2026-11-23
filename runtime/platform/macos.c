@@ -155,7 +155,7 @@ int plat_thread_realtime_check(uint64_t period_ns) {
 // the default class as before.
 int plat_cpu_count(void) { return 0; }  // (no affinity masks here: the caller uses the machine's count)
 
-void plat_thread_name(const char *name) { (void)name; }  // (SMRPG: en macOS los nombres de pthread son solo del hilo principal — no-op)
+void plat_thread_name(const char *name) { (void)name; }  // (SMRPG: on macOS pthread names are only the main thread's — no-op)
 
 void plat_thread_guest(int prio) {
     static int on = -1;
@@ -294,7 +294,7 @@ static int rm_entry(const char *path, const struct stat *sb, int flag, struct FT
 bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0; }
 bool plat_onedrive_synced(const char *dir) { (void)dir; return false; }
 
-// (SMRPG: solo Windows) runtime/platform.h
+// (SMRPG: Windows only) runtime/platform.h
 bool plat_spawn_self(void) { return false; }
 bool plat_proc_stats(PlatProcStats *s) { memset(s, 0, sizeof *s); return false; }
 bool plat_gpu_usage(double *pct) { *pct = 0; return false; }

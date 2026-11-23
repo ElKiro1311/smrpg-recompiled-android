@@ -1,15 +1,14 @@
-// (SMRPG) El medidor del menú: lo que gasta el juego en CPU, GPU, RAM, disco y memoria de vídeo, medido mientras corre.
-// Cada medio segundo (solo cuando alguien lo pide: el menú abierto, o LARECOMP_LOG_PERF=1 cada 2 s en el registro):
-//  - CPU: el tiempo de CPU del proceso (todos sus hilos) entre dos muestras, en % del procesador entero;
-//  - GPU: el temporizador de GPU del render (marcas de tiempo en cada envío, vulkan/exec.c pace_gpu_ns): el tiempo que
-//    la GPU pasó con el juego, en % del tiempo y en ms por imagen (sin la generación de fotogramas de AMD, que va por
-//    sus colas);
-//  - RAM: la memoria física del proceso (working set);
-//  - disco: los bytes leídos y escritos por el proceso, por segundo;
-//  - memoria de vídeo: la que usa el proceso según el controlador (VK_EXT_memory_budget) y, por clases, la de sus
-//    texturas (vulkan/textures.c vk_vram_by_kind) y la de AMD FSR y su generación de fotogramas (lo que dice AMD).
-// El semáforo de cada uno (verde / amarillo / rojo): CPU < 30 % / < 60 %, GPU < 60 % / < 90 %, RAM < 25 % / < 50 % de la
-// del equipo, disco < 10 / < 100 MB/s, memoria de vídeo < 60 % / < 85 % de lo que el controlador deja.
+// (SMRPG) The menu's meter: what the game uses of CPU, GPU, RAM, disk and video memory, measured while it runs. Every
+// half second (only when someone asks for it: the menu open, or LARECOMP_LOG_PERF=1 every 2 s in the log):
+//  - CPU: the process's CPU time (all its threads) between two samples, as a % of the whole processor;
+//  - GPU: the renderer's GPU timer (timestamps on every submit, vulkan/exec.c pace_gpu_ns): the time the GPU spent on
+//    the game, as a % of the time and in ms per frame (without AMD's frame generation, which runs on its own queues);
+//  - RAM: the process's physical memory (working set);
+//  - disk: the bytes read and written by the process, per second;
+//  - video memory: what the process uses according to the driver (VK_EXT_memory_budget) and, by kind, that of its
+//    textures (vulkan/textures.c vk_vram_by_kind) and that of AMD FSR and its frame generation (what AMD reports).
+// The traffic light of each one (green / yellow / red): CPU < 30% / < 60%, GPU < 60% / < 90%, RAM < 25% / < 50% of the
+// machine's, disk < 10 / < 100 MB/s, video memory < 60% / < 85% of what the driver allows.
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,7 +16,7 @@
 #include "perf_meter.h"
 #include "platform.h"
 
-int64_t pace_gpu_ns(void);                                  // nvn/vulkan/exec.c (-1: sin temporizador de GPU)
+int64_t pace_gpu_ns(void);                                  // nvn/vulkan/exec.c (-1: no GPU timer)
 uint64_t renderer_present_count(void);                      // nvn/vulkan/device.c
 bool vk_vram_budget(uint64_t *usage, uint64_t *budget);     // nvn/vulkan/device.c
 void vk_vram_by_kind(uint64_t out[3]);                      // nvn/vulkan/textures.c
@@ -65,11 +64,11 @@ static void sample(void) {
     float sx = 1, sy = 1;
     renderer_get_scale(&sx, &sy);
     n.px = (double)g_guest_w * sx * (double)g_guest_h * sy / (1920.0 * 1080.0);
-    {   // (la GPU entera según Windows, también la generación de fotogramas de AMD; si no, el temporizador del render)
+    {   // (the whole GPU according to Windows, AMD's frame generation included; otherwise, the renderer's timer)
         static uint64_t pdh_at;
         static double pdh_pct = -1;
         double v;
-        if (!pdh_at || t - pdh_at >= 1000000000ull) {  // (los contadores de Windows: una vez por segundo)
+        if (!pdh_at || t - pdh_at >= 1000000000ull) {  // (the Windows counters: once per second)
             pdh_at = t;
             if (plat_gpu_usage(&v)) pdh_pct = v;
         }
@@ -92,8 +91,8 @@ const PerfNow *perf_meter_now(void) {
     return &now_;
 }
 
-// LARECOMP_LOG_PERF=1 (pruebas: el impacto de cada ajuste): una línea [perf] cada 2 s. Desde la presentación
-// (vulkan/device.c), en el hilo del render.
+// LARECOMP_LOG_PERF=1 (tests: the impact of each setting): one [perf] line every 2 s. From the present
+// (vulkan/device.c), on the render thread.
 void perf_meter_log_tick(void) {
     static int on = -1;
     static uint64_t last;
@@ -104,8 +103,8 @@ void perf_meter_log_tick(void) {
     last = t;
     const PerfNow *n = perf_meter_now();
     if (!n->ok) return;
-    LOG("[perf] fotograma %llu %.1f fps cpu %.1f%% gpu %.1f%% %.2f ms/imagen ram %.2f GB disco %.1f MB/s vram %.2f/%.2f GB "
-        "(destinos %.0f MB, HD %.0f MB, texturas %.0f MB, fsr %.0f MB, fg %.0f MB) px %.2f\n",
+    LOG("[perf] frame %llu %.1f fps cpu %.1f%% gpu %.1f%% %.2f ms/frame ram %.2f GB disk %.1f MB/s vram %.2f/%.2f GB "
+        "(targets %.0f MB, HD %.0f MB, textures %.0f MB, fsr %.0f MB, fg %.0f MB) px %.2f\n",
         (unsigned long long)renderer_present_count(), n->fps, n->cpu_pct, n->gpu_pct, n->gpu_ms, n->ram_gb, n->io_mbs,
         n->vram_gb, n->vram_budget_gb, n->vram_targets / 1048576.0, n->vram_hd / 1048576.0, n->vram_tex / 1048576.0,
         n->vram_fsr / 1048576.0, n->vram_fg / 1048576.0, n->px);

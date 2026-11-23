@@ -1,11 +1,9 @@
 # How LAS Recomp works
 
-> **SMRPG Recomp:** este documento es el de LASRecomp (Link's Awakening), tal cual, como referencia. En este
-> port, los fallos van a las [issues de este repositorio](https://github.com/ElKiro1311/smrpg-recompiled/issues)
-> (nunca a peiikai/LASRecomp ni a su Discord); se trabaja sobre `main` (PC) o `android`; no hay ramas `beta_<n>`,
-> ni aleatorizador, ni `make dist`, y el ejecutable es `smrpg-recomp.exe`. Cómo instalar y compilar: README.md y
-> LEEME.md. *(English: this is LASRecomp's document, kept as reference; report SMRPG Recomp issues here, not
-> upstream.)*
+> **SMRPG Recomp:** this is LASRecomp's own document (Link's Awakening), kept as it is for reference. In this port, bugs
+> go to [this repository's issues](https://github.com/ElKiro1311/smrpg-recompiled-android/issues) (never to peiikai/LASRecomp or its
+> Discord); work happens on `main`; there are no `beta_<n>` branches, no randomizer and no `make dist`, and the executable
+> is `libmain.so`, inside the APK. How to install and build: README.md.
 
 A one-page map of the code. CONTRIBUTING.md lists the files and how to build and test; this explains how the parts
 fit together. File names are on the current development branch.

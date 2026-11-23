@@ -130,11 +130,11 @@ HLE_FUNC("_ZN5movie6Buffer13SetUint32DataEj", buf_set_u32) { BUF(c->x[0])->u32 =
 HLE_FUNC("_ZNK5movie6Buffer13GetUint32DataEv", buf_get_u32) { c->x[0] = BUF(c->x[0])->u32; }
 HLE_FUNC("_ZN5movie6Buffer12SetInt32DataEi", buf_set_i32) { BUF(c->x[0])->i32 = (int32_t)c->x[1]; }
 
-// (SMRPG / CRIWARE Sofdec) Data() es Base() + Offset() y Capacity() el búfer entero, como en el SDK
+// (SMRPG / CRIWARE Sofdec) Data() is Base() + Offset() and Capacity() the whole buffer, as in the SDK
 HLE_FUNC("_ZNK5movie6Buffer4DataEv", buf_data) { MBuffer *b = BUF(c->x[0]); c->x[0] = b->base + (uint64_t)(int64_t)b->offset; }
 
-// (SMRPG) lo que importa el main de SMRPG además: FindInt64, FindRect (el rectángulo va en cuatro entradas
-// «clave#l/t/r/b») y la asignación
+// (SMRPG) what else SMRPG's main imports: FindInt64, FindRect (the rectangle goes in four entries, "key#l/t/r/b") and
+// the assignment operator
 static void md_set_rect(MediaData *m, const char *k, int l, int t, int r, int b) {
     char n[96];
     const char *suf[4] = {"#l", "#t", "#r", "#b"};
@@ -177,12 +177,12 @@ HLE_FUNC("_ZN5movie9MediaDataaSERKS0_", md_assign) {
         dst->n = src->n;
         dst->codecpar = src->codecpar;
     }
-    // (devuelve *this)
+    // (returns *this)
 }
 
-// (SMRPG) CRIWARE Sofdec demultiplexa sus USM y da al decodificador la configuración de estas funciones:
-// VP9 con el tamaño del vídeo, H.264 con sus SPS / PPS. El MediaData lleva los parámetros de FFmpeg como los del
-// Extractor (dec_configure los lee igual).
+// (SMRPG) CRIWARE Sofdec demuxes its USM files and gives the decoder the configuration from these functions: VP9 with
+// the video size, H.264 with its SPS / PPS. The MediaData carries the FFmpeg parameters like the Extractor's does
+// (dec_configure reads them the same way).
 HLE_FUNC("_ZN5movie11SetCoreMaskEm", movie_set_core_mask) { (void)c; }
 HLE_FUNC("_ZN5movie33CreateVp9DecoderConfigurationDataEiiiPNS_9MediaDataE", movie_vp9_config) {
     int w = (int)c->x[0], h = (int)c->x[1], extra = (int)c->x[2];
@@ -197,8 +197,8 @@ HLE_FUNC("_ZN5movie33CreateVp9DecoderConfigurationDataEiiiPNS_9MediaDataE", movi
     md_set_str(m, "mime", "video/x-vnd.on2.vp9");
     md_set_int(m, "width", w);
     md_set_int(m, "height", h);
-    LOG("[movie] configuración VP9 %dx%d, %d.%03d imágenes/s\n", w, h, extra / 1000, extra % 1000);
-    c->x[0] = 1;  // (devuelve un bool: CRI solo llama a Configure si es cierto, main 0x7001521950)
+    LOG("[movie] VP9 configuration %dx%d, %d.%03d frames/s\n", w, h, extra / 1000, extra % 1000);
+    c->x[0] = 1;  // (returns a bool: CRI only calls Configure if it is true, main 0x7001521950)
 }
 HLE_FUNC("_ZN5movie34CreateH264DecoderConfigurationDataEPKhmS1_mPNS_9MediaDataE", movie_h264_config) {
     const uint8_t *ps[2] = {(const uint8_t *)(uintptr_t)c->x[0], (const uint8_t *)(uintptr_t)c->x[2]};
@@ -208,7 +208,7 @@ HLE_FUNC("_ZN5movie34CreateH264DecoderConfigurationDataEPKhmS1_mPNS_9MediaDataE"
     AVCodecParameters *p = avcodec_parameters_alloc();
     p->codec_type = AVMEDIA_TYPE_VIDEO;
     p->codec_id = AV_CODEC_ID_H264;
-    // Annex B: cada conjunto de parámetros tras un código de inicio (si no lo trae ya)
+    // Annex B: each parameter set after a start code (if it doesn't already have one)
     uint8_t *x = av_mallocz(pn[0] + pn[1] + 8 + AV_INPUT_BUFFER_PADDING_SIZE);
     size_t n = 0;
     for (int i = 0; i < 2; i++) {
@@ -222,8 +222,8 @@ HLE_FUNC("_ZN5movie34CreateH264DecoderConfigurationDataEPKhmS1_mPNS_9MediaDataE"
     p->extradata_size = (int)n;
     m->codecpar = p;
     md_set_str(m, "mime", "video/avc");
-    LOG("[movie] configuración H.264 (SPS %zu bytes, PPS %zu bytes)\n", pn[0], pn[1]);
-    c->x[0] = 1;  // (bool, como la de VP9)
+    LOG("[movie] H.264 configuration (SPS %zu bytes, PPS %zu bytes)\n", pn[0], pn[1]);
+    c->x[0] = 1;  // (bool, like the VP9 one)
 }
 
 HLE_FUNC("_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", movie_set_allocator) { (void)c; }
@@ -522,9 +522,10 @@ typedef struct {
     OutReady ready[NOUT];
     int nready;
     int width, height, stride, sample_rate, channels;
-    int type, fmt, mode;  // (SMRPG) los del constructor: tipo (1 AVC, 2 VP8, 3 VP9, 4 AAC, 5 Vorbis), formato, modo (1 CPU, 2 textura)
-    int slice;            // (SMRPG) filas del plano Y antes del UV: alineadas a 16 (textura) o la altura (modo CPU, como el SDK)
-    int cs709, full;      // (SMRPG) espacio de color del primer fotograma (-1 = aún no se sabe)
+    int type, fmt, mode;  // (SMRPG) the constructor's: type (1 AVC, 2 VP8, 3 VP9, 4 AAC, 5 Vorbis), format, mode (1 CPU, 2 texture)
+    int slice;            // (SMRPG) rows of the Y plane before the UV: aligned to 16 (texture) or the height (CPU mode,
+                          // like the SDK)
+    int cs709, full;      // (SMRPG) color space of the first frame (-1 = not known yet)
     struct SwsContext *sws;
     uint8_t *rgba;
     AVFrame *pending[NPENDING];
@@ -585,9 +586,10 @@ static void dec_configure(Cpu *c) {
     d->frame = av_frame_alloc();
     d->pkt = av_packet_alloc();
     d->video = p->codec_type == AVMEDIA_TYPE_VIDEO;
-    d->width = p->width > 0 ? p->width : 1920;  // (SMRPG: una configuración H.264 de CRI no trae tamaño)
+    d->width = p->width > 0 ? p->width : 1920;  // (SMRPG: a CRI H.264 configuration carries no size)
     d->height = p->height > 0 ? p->height : 1080;
-    // (SMRPG) en modo CPU (CRI Sofdec) el NV12 va compacto, como lo deja el SDK: stride = ancho, el UV tras h filas
+    // (SMRPG) in CPU mode (CRI Sofdec) the NV12 is tightly packed, as the SDK leaves it: stride = width, the UV after h
+    // rows
     bool cpu = d->mode == 1;
     d->stride = cpu ? d->width : (d->width + 255) & ~255;
     d->slice = cpu ? d->height : (d->height + 15) & ~15;
@@ -598,7 +600,7 @@ static void dec_configure(Cpu *c) {
     d->out_cap = d->video ? (uint32_t)(d->stride * d->slice * 3 / 2) : 64 << 10;
     for (int i = 0; i < NIN; i++) d->in_mem[i] = buf_get(d->in_cap);
     for (int i = 0; i < NOUT; i++) d->out_mem[i] = buf_get(d->out_cap);
-    LOG("[movie] decoder %s configured: %dx%d %d Hz %d ch (tipo %d, formato %d, modo %d)\n", codec->name, d->width, d->height,
+    LOG("[movie] decoder %s configured: %dx%d %d Hz %d ch (type %d, format %d, mode %d)\n", codec->name, d->width, d->height,
         d->sample_rate, d->channels, d->type, d->fmt, d->mode);
     c->x[0] = 0;
 }
@@ -615,9 +617,9 @@ static void dec_output_format(Decoder *d, MediaData *m) {
         md_set_str(m, "mime", "video/raw");
         md_set_int(m, "width", d->width);
         md_set_int(m, "height", d->height);
-        // (SMRPG) todo lo que pone el DecoderImpl::GetOutputBufferFormatFromDecoder del SDK (nxnative md_format):
-        // CRI Sofdec lee nv12-uv-stride sin comprobarlo; nv12-colorspace elige la matriz YUV -> RGB (1 BT.601
-        // limitado, 2 BT.601 completo, 3 BT.709 limitado, 4 BT.709 completo)
+        // (SMRPG) everything the SDK's DecoderImpl::GetOutputBufferFormatFromDecoder sets (nxnative md_format): CRI
+        // Sofdec reads nv12-uv-stride without checking it; nv12-colorspace picks the YUV -> RGB matrix (1 BT.601
+        // limited, 2 BT.601 full, 3 BT.709 limited, 4 BT.709 full)
         md_set_rect(m, "crop", 0, 0, d->width - 1, d->height - 1);
         md_set_int(m, "stride", d->stride);
         md_set_int(m, "slice-height", d->slice);
@@ -688,7 +690,7 @@ static void dec_acquire_input(Cpu *c) {
     pthread_mutex_lock(&d->lock);
     int out_free = 0;
     for (int i = 0; i < NOUT; i++) if (!d->out_busy[i]) out_free++;
-    // (SMRPG: «no hay» con los códigos del SDK, 0x1011 entrada / 0x100e salida, como nxnative; antes 1)
+    // (SMRPG: "none available" with the SDK's codes, 0x1011 input / 0x100e output, like nxnative; it was 1 before)
     if (out_free < 2 || d->npending) { pthread_mutex_unlock(&d->lock); c->x[0] = 0x1011; return; }  // backpressure
     int idx = -1, free_n = 0;
     for (int i = 0; i < NIN; i++)
@@ -723,7 +725,7 @@ static bool emit_frame(Decoder *d, AVFrame *f, int64_t time, uint32_t flags) {
         size = 0;
     } else if (d->video) {
         int h = d->height, w = d->width, uv_off = d->stride * d->slice;
-        // (SMRPG) un fotograma de otro tamaño (una configuración sin tamaño) se recorta o se rellena de negro
+        // (SMRPG) a frame of another size (a configuration with no size) is cropped or padded with black
         int cw = f->width < w ? f->width : w, chh = f->height < h ? f->height : h;
         if (cw < w || chh < h) { memset(o, 16, (size_t)uv_off); memset(o + uv_off, 128, (size_t)d->stride * (h / 2)); }
         if (d->cs709 < 0) {
@@ -864,15 +866,15 @@ static void dec_get_output_buffer(Cpu *c) {
         c->x[0] = 0;
         return;
     }
-    // (SMRPG) el cliente trae su propio búfer (CRI Sofdec en modo CPU, como Unity en otros juegos): el SDK copia el
-    // fotograma desde el principio del búfer (Data() = Base() + Offset(): el rango se pone a 0 antes) y fija el rango
-    bool ours = false;  // (un Buffer al que una llamada anterior le puso uno de nuestros búferes no es del cliente)
+    // (SMRPG) the client brings its own buffer (CRI Sofdec in CPU mode, like Unity in other games): the SDK copies the
+    // frame to the start of the buffer (Data() = Base() + Offset(): the range is set to 0 first) and sets the range
+    bool ours = false;  // (a Buffer that an earlier call gave one of our buffers isn't the client's)
     for (int k = 0; k < NOUT; k++) ours |= b->base == (uint64_t)(uintptr_t)d->out_mem[k];
     if (b->base && b->capacity && !ours) {
         uint32_t n = d->out_size[i];
         if (b->capacity < n) {
             static int warned;
-            if (warned++ < 4) LOG("[movie] el búfer del cliente tiene %llu bytes y el fotograma %u\n", (unsigned long long)b->capacity, n);
+            if (warned++ < 4) LOG("[movie] the client's buffer holds %llu bytes and the frame takes %u\n", (unsigned long long)b->capacity, n);
             b->offset = 0; b->size = 0;
             c->x[0] = 0x100b;
             return;
@@ -890,7 +892,7 @@ static void dec_get_output_buffer(Cpu *c) {
     c->x[0] = 0;
 }
 
-// (SMRPG) entrada 17: GetOutputBuffer(int, Buffer*, MediaData*): el fotograma y su formato
+// (SMRPG) slot 17: GetOutputBuffer(int, Buffer*, MediaData*): the frame and its format
 static void dec_get_output_buffer_fmt(Cpu *c) {
     if (c->x[3]) dec_output_format(self_state(c), md(c->x[3]));
     dec_get_output_buffer(c);
@@ -949,9 +951,9 @@ RT_ON_RESET(movie_reset) {
     g_skip_held = false, g_skip_pressed_at = 0;
 }
 
-// slot 14: GetOutputBufferSize(int *size, int *mode) (SDK 14). (SMRPG) El tamaño de una salida (un fotograma NV12
-// o el PCM) y el modo, como el SDK: CRI Sofdec reserva sus búferes de salida con él (antes 0, y un int64 en el
-// segundo, que es un int).
+// slot 14: GetOutputBufferSize(int *size, int *mode) (SDK 14). (SMRPG) The size of an output (an NV12 frame or the PCM)
+// and the mode, like the SDK: CRI Sofdec allocates its output buffers from it (it was 0 before, with an int64 in the
+// second one, which is an int).
 static void dec_get_counts(Cpu *c) {
     Decoder *d = self_state(c);
     int size = !d ? 0 : d->video ? d->stride * d->slice * 3 / 2 : (int)d->out_cap;
@@ -973,10 +975,10 @@ HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11Dec
     Decoder *d = calloc(1, sizeof *d);
     movie_track(1, d, true);
     pthread_mutex_init(&d->lock, NULL);
-    d->type = (int)c->x[1];  // (SMRPG) tipo, formato de salida y modo (1 CPU: NV12 en los búferes del cliente)
+    d->type = (int)c->x[1];  // (SMRPG) type, output format and mode (1 CPU: NV12 in the client's buffers)
     d->fmt = (int)c->x[2];
     d->mode = (int)c->x[3];
-    LOG("[movie] decoder creado: tipo %d, formato %d, modo %d\n", d->type, d->fmt, d->mode);
+    LOG("[movie] decoder created: type %d, format %d, mode %d\n", d->type, d->fmt, d->mode);
     self[0] = vt;
     self[1] = (uint64_t)(uintptr_t)d;
 }

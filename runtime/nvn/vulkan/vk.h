@@ -57,21 +57,22 @@ typedef struct {
     VkFormat sc_format;
     VkExtent2D sc_extent;
     uint32_t sc_count;
-    // (SMRPG: la cadena puede tener más imágenes de las pedidas —Android añade las que se queda el compositor—: con 8
-    // pedidas, la Thor dio más de 8, y una adquirida fuera de estas tablas cerraba el juego dentro de vkCmdBlitImage)
+    // (SMRPG: the swapchain can have more images than requested (Android adds the ones the compositor keeps): with 8
+    // requested, the Thor gave more than 8, and one acquired outside these tables crashed the game inside
+    // vkCmdBlitImage)
 #define VK_SC_MAX 16
     VkImage sc_images[VK_SC_MAX];
     VkImageView sc_views[VK_SC_MAX];
-    // (SMRPG) HDR: con «HDR» activo y una pantalla que ofrece HDR10 (VK_EXT_swapchain_colorspace), la cadena es
-    // A2B10G10R10 + ST2084 (PQ); la ventana (juego + menú) se dibuja en hdr_img, del formato SDR de siempre (win_format),
-    // y vk_frame_end la codifica (exec.c vk_hdr_encode). win_format: el formato en que se dibuja la ventana (el de la
-    // primera cadena SDR: los pipelines del present y de ImGui no cambian al activar o quitar el HDR).
+    // (SMRPG) HDR: with "HDR" on and a display that offers HDR10 (VK_EXT_swapchain_colorspace), the swapchain is
+    // A2B10G10R10 + ST2084 (PQ); the window (game + menu) is drawn into hdr_img, in the usual SDR format (win_format),
+    // and vk_frame_end encodes it (exec.c vk_hdr_encode). win_format: the format the window is drawn in (the first SDR
+    // swapchain's: the present and ImGui pipelines don't change when HDR is turned on or off).
     VkFormat win_format;
     bool hdr_ext, hdr_active, hdr_wanted;
-    bool lsfg_features;  // (SMRPG) la GPU tiene lo que piden los sombreadores de Lossless Scaling (vk_lsfg.c)
-    bool sc_lsfg;        // (SMRPG) la cadena se hizo para la generación de Lossless Scaling (FIFO, más imágenes)
-    uint32_t sc_lsfg_extra;  // (SMRPG) cuántas imágenes de más
-    bool budget_ext;     // (SMRPG) VK_EXT_memory_budget activa: lo que usa el proceso, según el controlador (vk_lsfg.c)
+    bool lsfg_features;  // (SMRPG) the GPU has what the Lossless Scaling shaders need (vk_lsfg.c)
+    bool sc_lsfg;        // (SMRPG) the swapchain was made for Lossless Scaling generation (FIFO, more images)
+    uint32_t sc_lsfg_extra;  // (SMRPG) how many extra images
+    bool budget_ext;     // (SMRPG) VK_EXT_memory_budget enabled: what the process uses, according to the driver (vk_lsfg.c)
     VkImage hdr_img;
     VmaAllocation hdr_mem;
     VkImageView hdr_view;
@@ -79,7 +80,7 @@ typedef struct {
 } VkG;
 void vk_log_memory(const char *why);  // (device.c: per-heap budget and use, at start and on allocation failures)
 extern VkG g_vk;
-// (SMRPG Android) el ritmo de presentación (vk_pacing.c, VK_GOOGLE_display_timing): cada imagen un número fijo de refrescos
+// (SMRPG Android) present pacing (vk_pacing.c, VK_GOOGLE_display_timing): each frame a fixed number of refreshes
 bool vk_pacing_wanted(void);
 void vk_pacing_init(bool ext);
 void vk_pacing_swapchain(VkSwapchainKHR sc);
@@ -138,8 +139,8 @@ typedef struct TexBackend {
     // (g_vk.lean_usage) the only formats views of this image may have: nview_fmt 0 = any compatible one
     VkFormat view_fmt[2];
     uint8_t nview_fmt;
-    // (SMRPG) texturas HD (vulkan/texpack.c): la imagen es la de un PNG de la carpeta de texturas, rx / ry veces la
-    // original; rkey, la huella de los datos del juego a los que sustituye
+    // (SMRPG) HD textures (vulkan/texpack.c): the image is that of a PNG from the textures folder, rx / ry times the
+    // original; rkey, the hash of the game data it replaces
     bool replaced;
     uint64_t rkey;
     float rx, ry;
@@ -151,7 +152,7 @@ const char *texpack_lookup(uint64_t key);
 bool texpack_active(void);
 uint8_t *texpack_load(const char *path, uint32_t *w, uint32_t *h);
 void texpack_dump_rgba(uint64_t key, const uint8_t *rgba, uint32_t w, uint32_t h, uint32_t fmt);
-// vulkan/textures.c: la sustitución (y vuelta atrás) de la imagen de una textura
+// vulkan/textures.c: replacing (and restoring) a texture's image
 bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path);
 void vk_texpack_unreplace(NvnTexture *t);
 bool vk_texpack_candidate(NvnTexture *t);

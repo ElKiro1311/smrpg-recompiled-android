@@ -2,8 +2,8 @@
 #pragma once
 #include <stdbool.h>
 
-// (SMRPG) El tamaño de la pantalla del juego: 1920x1080, o más ancho / alto con «Pantalla ancha» (runtime/hle/
-// unity_screen.c, cuando Unity elige su resolución). La escala de render va desde él.
+// (SMRPG) The size of the game's screen: 1920x1080, or wider / taller with "Widescreen" (runtime/hle/unity_screen.c,
+// when Unity picks its resolution). The render scale starts from it.
 extern int g_guest_w, g_guest_h;
 
 typedef struct {

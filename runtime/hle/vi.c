@@ -10,15 +10,15 @@ static KEvent *vsync_event;
 uint32_t vi_vsync_handle(void) { return vsync_r; }
 volatile uint64_t g_vsync_count;  // vsyncs signalled so far (runtime/hle/framepace.c, runtime/nvn/pace.c)
 volatile uint64_t g_vsync_ns;     // plat_now_ns() of the latest (stored after the count: count >= the vsync it's from)
-volatile uint64_t g_vsync_period_ns;  // (SMRPG) el periodo de ahora (0 antes del primero): el tiempo de imagen de AMD FSR
-// (SMRPG Android) si el backend sabe cuándo refresca la pantalla (vulkan/vk_pacing.c, VK_GOOGLE_display_timing), el
-// vsync siguiente en un refresco: el juego produce sus imágenes al ritmo de la pantalla, no al de un reloj que se desfasa
+volatile uint64_t g_vsync_period_ns;  // (SMRPG) the current period (0 before the first one): AMD FSR's frame time
+// (SMRPG Android) if the backend knows when the display refreshes (vulkan/vk_pacing.c, VK_GOOGLE_display_timing), the
+// next vsync on a refresh: the game produces its frames at the display's pace, not at that of a clock that drifts
 uint64_t (*volatile g_vsync_follow)(uint64_t next, uint64_t period);
 uint64_t g_native_window;
 
-// (SMRPG) el periodo del vsync: 60 Hz como la consola, o el «Límite de FPS» de los ajustes (Unity marca su ritmo con
-// este evento: más vsyncs por segundo, más imágenes por segundo). LARECOMP_VSYNC_HZ lo fija para pruebas. En combate,
-// 60 Hz siempre: su lógica va por pasos de imagen (hle/battle_rate.c).
+// (SMRPG) the vsync period: 60 Hz like the console, or the "FPS limit" from the settings (Unity paces itself with this
+// event: more vsyncs per second, more frames per second). LARECOMP_VSYNC_HZ fixes it for testing. In battle, always 60
+// Hz: its logic advances in per-frame steps (hle/battle_rate.c).
 static uint64_t vsync_period_ns(void) {
     static int env = -1;
     if (env < 0) env = getenv("LARECOMP_VSYNC_HZ") ? atoi(getenv("LARECOMP_VSYNC_HZ")) : 0;
@@ -32,7 +32,7 @@ static uint64_t vsync_period_ns(void) {
 
 static void *vsync_thread(void *arg) {
     (void)arg;
-    plat_thread_name("vi-vsync");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("vi-vsync");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     uint64_t period = vsync_period_ns();
     g_vsync_period_ns = period;
     plat_thread_realtime(period);
@@ -40,11 +40,11 @@ static void *vsync_thread(void *arg) {
     uint64_t next = plat_now_ns();
     for (;;) {
         uint64_t p2 = vsync_period_ns();
-        if (p2 != period) {  // (cambiado desde el menú, o al entrar en un combate o salir de él)
+        if (p2 != period) {  // (changed from the menu, or on entering or leaving a battle)
             period = p2;
             g_vsync_period_ns = period;
             plat_thread_realtime(period);
-            LOG("[vi] vsync a %.1f Hz\n", 1e9 / (double)period);
+            LOG("[vi] vsync at %.1f Hz\n", 1e9 / (double)period);
         }
         next += period;
         uint64_t (*follow)(uint64_t, uint64_t) = g_vsync_follow;

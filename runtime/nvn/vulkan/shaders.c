@@ -251,7 +251,7 @@ static const char *builtin_src(const char *name, int *stage) {
                "layout(location = 0) out vec4 o;\n"
                "void main() {\n"
                "  vec2 suv = uv;\n"
-               // (SMRPG, del PC 0.49.1-beta) The game's own final image comes with its first row and last column
+               // (SMRPG, from PC 0.49.1-beta) The game's own final image comes with its first row and last column
                // half-blended with black (at native 1:1 too): its post chain leaves the last row/column of its
                // buffers unwritten and its final blit blends them in. pf.y (LARECOMP_NO_EDGE_FIX=1): off. The outer
                // samples land on the second texel's centre: the edge replicates the neighbour instead of the blend.
@@ -444,11 +444,11 @@ static const char *builtin_src(const char *name, int *stage) {
                "}\n";
     }
     // (SMRPG Android) Snapdragon Game Super Resolution 1 (SGSR 1), Copyright (c) 2025 Qualcomm Innovation Center, Inc.,
-    // BSD-3-Clause (third_party/snapdragon-gsr): de sgsr1_shader_mobile.frag, modo RGBA (el verde como luma), umbral de
-    // borde 8/255 y nitidez 2 (los de Qualcomm para móviles). Escalado con un filtro de 12 muestras tipo Lanczos y
-    // afilado adaptativo en una sola pasada, hecho para las Adreno. a.xy: la coordenada de textura por píxel de salida
-    // (contenido / salida / tamaño de la textura); a.zw: 1 / tamaño de la textura; b.xy: tamaño de la textura; b.zw: la
-    // mayor coordenada de reunión (gather) dentro del contenido (con resolución dinámica, el resto guarda imágenes viejas).
+    // BSD-3-Clause (third_party/snapdragon-gsr): from sgsr1_shader_mobile.frag, RGBA mode (green as luma), edge
+    // threshold 8/255 and sharpness 2 (Qualcomm's values for mobile). Upscaling with a 12-sample Lanczos-like filter
+    // and adaptive sharpening in a single pass, made for Adreno GPUs. a.xy: the texture coordinate per output pixel
+    // (contents / output / texture size); a.zw: 1 / texture size; b.xy: texture size; b.zw: the largest gather
+    // coordinate inside the contents (with dynamic resolution, the rest holds old images).
     if (!strcmp(name, "sgsr1.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -507,16 +507,16 @@ static const char *builtin_src(const char *name, int *stage) {
                "}\n";
     }
     // (SMRPG Android) Snapdragon Game Super Resolution 2 (SGSR 2), Copyright (c) 2024 Qualcomm Innovation Center, Inc.,
-    // BSD-3-Clause (third_party/snapdragon-gsr): su variante de 2 pasadas con sombreadores de fragmentos (la que Qualcomm
-    // recomienda para móviles), de sgsr2_convert.fs / sgsr2_upscale.fs, adaptada al runtime (exec.c gsr2_dispatch):
-    // coordenadas por gl_FragCoord, lo dibujado en la esquina de imágenes más grandes (la resolución dinámica de FSR),
-    // la profundidad invertida de URP, y los vectores de movimiento de URP en vez de los codificados de su ejemplo.
-    // 1) gsr2conv.frag, al tamaño de lo dibujado (rw x rh): t0 = la profundidad, t1 = los vectores de URP (RG16F,
-    // ahora - antes en UV de lo dibujado). Sale (movimiento x2 = en NDC, como lo espera SGSR 2; recorte por
-    // profundidad; 0; 0). a.xy = 1 / tamaño de las imágenes, a.zw = (rw, rh); b.x = tan(campo vertical / 2) * rw / rh,
-    // b.y = 1 con la profundidad invertida, b.zw = multiplicadores de los vectores (2, 2; LARECOMP_GSR2_MV para pruebas).
-    // El 2x2 central se toma por el orden de textureGather de Vulkan (x = (i0, j1), y = (i1, j1), z = (i1, j0),
-    // w = (i0, j0)): el original lo leía con otro orden y comparaba filas de una por encima y dos por debajo.
+    // BSD-3-Clause (third_party/snapdragon-gsr): its 2-pass variant with fragment shaders (the one Qualcomm recommends
+    // for mobile), from sgsr2_convert.fs / sgsr2_upscale.fs, adapted to the runtime (exec.c gsr2_dispatch): coordinates
+    // from gl_FragCoord, the rendered area in the corner of larger images (FSR's dynamic resolution), URP's reversed
+    // depth, and URP's motion vectors instead of the encoded ones in its sample.
+    // 1) gsr2conv.frag, at the size of the rendered area (rw x rh): t0 = the depth, t1 = URP's vectors (RG16F, now -
+    //    before, in UVs of the rendered area). It outputs (motion x2 = in NDC, as SGSR 2 expects it; depth clip; 0; 0).
+    //    a.xy = 1 / size of the images, a.zw = (rw, rh); b.x = tan(vertical fov / 2) * rw / rh, b.y = 1 with reversed
+    //    depth, b.zw = vector multipliers (2, 2; LARECOMP_GSR2_MV for testing). The center 2x2 is taken in the order of
+    //    Vulkan's textureGather (x = (i0, j1), y = (i1, j1), z = (i1, j0), w = (i0, j0)): the original read it in a
+    //    different order and compared rows one above and two below.
     if (!strcmp(name, "gsr2conv.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -550,17 +550,20 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(texelFetch(mv, p, 0).xy * pc.b.zw, depthclip, 0.0);\n"
                "}\n";
     }
-    // 2) gsr2up.frag, al tamaño de la salida (ow x oh), en la historia nueva: t0 = la historia anterior (ow x oh),
-    // t1 = lo de gsr2conv (rw x rh), t2 = el color de la escena (texelFetch: lo dibujado, en la esquina). Las tres van en
-    // la esquina de imágenes más grandes: sus coordenadas, en píxeles y con textureSize. a = (rw, rh,
-    // ow, oh), b = (desplazamiento de subpíxel del fotograma en píxeles de lo dibujado, minLerpContribution, reset).
-    // scaleRatio sale de los tamaños, como en el ejemplo de Qualcomm. La historia con NaN o infinitos no se usa.
-    // Tres cosas de las variantes de compute de Qualcomm (glsl_2_pass_cs / glsl_3_pass_cs) que la de fragmentos no trae:
-    // - el color se comprime a [0, 1) con c / (1 + max(c)) antes de la caja y de la mezcla (su preExposure = 1): la de
-    //   fragmentos es para LDR (su ejemplo dibuja en RGBA8 sRGB) y la escena de URP es HDR; la historia se guarda
-    //   comprimida y gsr2copy la expande al escribir la escena;
-    // - el ancho del filtro, con la ampliación hasta 1,99: a x3 los 5 pesos de Lanczos podían valer 0 (0 / 0 = NaN);
-    // - con reset, solo lo de este fotograma (con pesos de suma negativa la fórmula aún mezclaba la historia vieja).
+    // 2) gsr2up.frag, at the output size (ow x oh), into the new history: t0 = the previous history (ow x oh), t1 =
+    //    gsr2conv's output (rw x rh), t2 = the scene color (texelFetch: the rendered area, in the corner). All three
+    //    are in the corner of larger images: their coordinates, in pixels and with textureSize. a = (rw, rh, ow, oh), b
+    //    = (the frame's subpixel jitter in pixels of the rendered area, minLerpContribution, reset). scaleRatio comes
+    //    from the sizes, as in Qualcomm's sample. History with NaNs or infinities is not used.
+    // Three things from Qualcomm's compute variants (glsl_2_pass_cs / glsl_3_pass_cs) that the fragment one does not
+    // have:
+    // - the color is compressed to [0, 1) with c / (1 + max(c)) before the box and the blend (its preExposure = 1): the
+    //   fragment one is for LDR (its sample draws to sRGB RGBA8) and URP's scene is HDR; the history is stored
+    //   compressed and gsr2copy expands it when writing the scene;
+    // - the filter width, with the upscale factor capped at 1.99: at x3 the 5 Lanczos weights could all be 0 (0 / 0 =
+    //   NaN);
+    // - with reset, only this frame's data (with weights summing to a negative value, the formula still blended in the
+    //   old history).
     if (!strcmp(name, "gsr2up.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -638,8 +641,8 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(mix(HistoryColor, Upsampledcw.xyz, alpha), 0.0);\n"
                "}\n";
     }
-    // 3) gsr2copy.frag: la historia nueva (t0, ow x oh, comprimida) a la escena, expandida (la inversa de tm de gsr2up),
-    // en su formato, con alfa 1
+    // 3) gsr2copy.frag: the new history (t0, ow x oh, compressed) to the scene, expanded (the inverse of gsr2up's tm),
+    //    in its format, with alpha 1
     if (!strcmp(name, "gsr2copy.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -679,10 +682,10 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) Reducción con filtro de caja (supersampling, o una imagen interna mayor que la ventana): la huella de cada
-    // píxel de salida en la imagen (a.xy: tamaño del contenido, a.zw: el de la salida) con b.x x b.y muestras bilineales
-    // repartidas por ella (b.zw: tamaño de la textura), promediadas en espacio lineal (la imagen va codificada en gamma).
-    // Con escala entera (x4, x16) cada muestra cae en el centro de un texel: media exacta.
+    // (SMRPG) Box-filter downscale (supersampling, or an internal image larger than the window): each output pixel's
+    // footprint in the image (a.xy: contents size, a.zw: output size) with b.x x b.y bilinear samples spread over it
+    // (b.zw: texture size), averaged in linear space (the image is gamma-encoded). With an integer scale (x4, x16) each
+    // sample lands on the center of a texel: an exact average.
     if (!strcmp(name, "downsample.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -702,9 +705,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(pow(acc / float(nx * ny), vec3(1.0 / 2.2)), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) HDR10: la ventana SDR (gamma sRGB) a PQ (ST 2084) en Rec.2020. El blanco SDR va al «blanco de papel»
-    // (a.x nits); con a.z > 0 las luces (lo más brillante de la imagen, por encima de ~60 %) se realzan hacia el pico
-    // (a.y nits) con una curva suave, para que el HDR se note sin cambiar los tonos medios.
+    // (SMRPG) HDR10: the SDR window (sRGB gamma) to PQ (ST 2084) in Rec.2020. SDR white goes to "paper white" (a.x
+    // nits); with a.z > 0 the highlights (the brightest part of the image, above ~60%) are boosted toward the peak (a.y
+    // nits) with a smooth curve, so that HDR is noticeable without changing the midtones.
     if (!strcmp(name, "hdr10.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -727,9 +730,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(pq(max(to2020 * n709, vec3(0.0))), 1.0);\n"
                "}\n";
     }
-    // (SMRPG) «Negro puro» (exec.c lut_black_fix): la LUT de etalonaje de URP (t = su copia) con el negro a 0. Su texel
-    // (0, 0) es lo que sale para el negro, n: (c - m) / (1 - m) con m = n entero hasta 2/255 (el velo del juego es 1/255)
-    // y cada vez menos hasta 6/255, sin saltos; un negro más alto es a propósito y se deja.
+    // (SMRPG) "True black" (exec.c lut_black_fix): URP's color grading LUT (t = its copy) with black at 0. Its texel
+    // (0, 0) is what comes out for black, n: (c - m) / (1 - m) with m = all of n up to 2/255 (the game's veil is 1/255)
+    // and less and less up to 6/255, with no jumps; a higher black is deliberate and is left alone.
     if (!strcmp(name, "lutblack.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"

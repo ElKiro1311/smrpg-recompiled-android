@@ -11,7 +11,7 @@ PLATFORM := linux
 else
 PLATFORM := macos
 endif
-# (SMRPG Android: `make PLATFORM=android ABI=...`; la carpeta y el C generado, antes de las listas de objetos)
+# (SMRPG Android: `make PLATFORM=android ABI=...`; the folder and the generated C, before the lists of objects)
 ifeq ($(PLATFORM),android)
 ABI      ?= x86_64
 B        ?= build/android-$(ABI)
@@ -51,7 +51,7 @@ GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibi
 # (strip: with no generated code the space between the two would be all that's left, and $(if) takes a lone space as
 # true. No comment after the value: make keeps the spaces before it)
 GEN_SRC  := $(strip $(wildcard $(GEN)/main/*.c) $(wildcard $(GEN)/sdk/*.c))
-# (SMRPG) tools/game_overrides.o el primero: sus funciones sustituyen a las generadas (GAMELIB_LDFLAGS, Windows)
+# (SMRPG) tools/game_overrides.o first: its functions replace the generated ones (GAMELIB_LDFLAGS, Windows)
 GEN_OBJ  := $(B)/obj/tools/game_overrides.o $(patsubst %.c,$(B)/obj/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(B)/obj/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c runtime/*.cpp) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) \
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c
@@ -98,7 +98,7 @@ GAMELIB  := $(B)/lasgame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld  # (the runtime functions it calls: the app's own, -rdynamic)
 GAMELIB_SHARED := -shared
 else ifeq ($(PLATFORM),windows)
-# (SMRPG) el ejecutable de la aplicación (SMRPG Recomp)
+# (SMRPG) the application's executable (SMRPG Recomp)
 EXE      := $(B)/smrpg-recomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
@@ -121,42 +121,42 @@ GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/smrpg-recomp.dll.a -Wl,--allow-mult
 GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
 
-# (SMRPG Android) `make PLATFORM=android ABI=x86_64|arm64-v8a`: el programa como build/android-<abi>/libmain.so (lo
-# carga SDLActivity: tools/android/app) y el código del juego como lasgame.so, enlazado contra él. Con el NDK del SDK
-# de Android (NDK, o ANDROID_SDK/ndk/29.0.14206865: del entorno o de local.env, ver local.env.ejemplo) y las
-# dependencias de tools/android/deps.sh (../deps/<abi>). El APK: tools/android/apk.sh.
-# x86_64 es para el emulador (el mismo C generado que el PC, --simd c); arm64-v8a, para los móviles.
+# (SMRPG Android) `make PLATFORM=android ABI=x86_64|arm64-v8a`: the program as build/android-<abi>/libmain.so (SDLActivity
+# loads it: tools/android/app) and the game code as lasgame.so, linked against it. With the Android SDK's NDK (NDK, or
+# ANDROID_SDK/ndk/29.0.14206865: from the environment or from local.env, see local.env.example) and the dependencies of
+# tools/android/deps.sh (../deps/<abi>). The APK: tools/android/apk.sh.
+# x86_64 is for the emulator (the same generated C as on the PC, --simd c); arm64-v8a, for phones.
 ifeq ($(PLATFORM),android)
 ANDROID_API := 33
-# (sin comentario detrás de los valores: make guardaría en la ruta los espacios de antes del #)
+# (no comment after the values: make would keep the spaces before the # in the path)
 LOCAL_ANDROID_SDK := $(shell sed -n 's/^ANDROID_SDK=//p' local.env 2>/dev/null | tail -n 1 | tr -d '\r')
 LOCAL_NDK := $(shell sed -n 's/^NDK=//p' local.env 2>/dev/null | tail -n 1 | tr -d '\r')
 ANDROID_SDK := $(or $(ANDROID_SDK),$(LOCAL_ANDROID_SDK))
 NDK      ?= $(or $(LOCAL_NDK),$(if $(ANDROID_SDK),$(ANDROID_SDK)/ndk/29.0.14206865))
 ifeq ($(NDK),)
-$(error falta el NDK de Android: pon ANDROID_SDK o NDK en local.env (ver local.env.ejemplo) o en el entorno)
+$(error the Android NDK is missing: put ANDROID_SDK or NDK in local.env (see local.env.example) or in the environment)
 endif
 NDKTC    := $(NDK)/toolchains/llvm/prebuilt/windows-x86_64
 ATRIPLE  := $(if $(filter arm64-v8a,$(ABI)),aarch64,x86_64)-linux-android$(ANDROID_API)
-CC       := "$(NDKTC)/bin/clang.exe" --target=$(ATRIPLE) -fPIC  # (todo va en bibliotecas compartidas: todas las reglas)
+CC       := "$(NDKTC)/bin/clang.exe" --target=$(ATRIPLE) -fPIC  # (everything goes into shared libraries: every rule)
 CXX      := "$(NDKTC)/bin/clang++.exe" --target=$(ATRIPLE) -fPIC
-# (relativa: abspath no mira CURDIR, y con espacios en la carpeta rompería -I y -L; sin comentario detrás)
+# (relative: abspath does not look at CURDIR, and with spaces in the folder it would break -I and -L; no comment after it)
 ADEPS    ?= ../deps/$(ABI)
 EXE      := $(B)/libmain.so
 DEPINC   := -I$(ADEPS)/include
 OSFLAGS  := -fPIC -Wno-format -DSMRPG_ANDROID
-# la versión de Android (la del APK: la primera «x.y.z-alfa|beta» de VERSIONES-ANDROID.txt) en el menú y el registro
-ANDROID_VN := $(shell sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-[a-z]*\) .*/\1/p' VERSIONES-ANDROID.txt | head -1)
+# the Android version (the APK's: the first "x.y.z-alpha|beta" of CHANGELOG-ANDROID.txt) in the menu and the log
+ANDROID_VN := $(shell sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-[a-z]*\) .*/\1/p' CHANGELOG-ANDROID.txt | head -1)
 OSFLAGS  += -DANDROID_APP_VERSION=\"$(ANDROID_VN)\"
-$(B)/rt/main.o $(B)/rt/ui/menu.o: VERSIONES-ANDROID.txt
+$(B)/rt/main.o $(B)/rt/ui/menu.o: CHANGELOG-ANDROID.txt
 ifeq ($(ABI),arm64-v8a)
 GENSIMD  := --simd asm
-# el juego, 0x60_0000_0000 más abajo (runtime/guest_addr.h): con 39 bits de direcciones, su sitio de siempre es de Android
+# the game, 0x60_0000_0000 lower (runtime/guest_addr.h): with 39-bit addresses, its usual place belongs to Android
 GUEST_SHIFT := 0x6000000000
 OSFLAGS  += -DGUEST_SHIFT=$(GUEST_SHIFT)ull
 GENFLAGS += -DGUEST_SHIFT=$(GUEST_SHIFT)ull
 else
-# (el emulador de Android no ofrece AVX2, FMA ni BMI2 a su CPU invitada: x86-64-v2; lasgame.so.cpu lo dice)
+# (the Android emulator offers no AVX2, FMA or BMI2 to its guest CPU: x86-64-v2; lasgame.so.cpu says so)
 GENARCH  ?= -march=x86-64-v2
 GAMELIB_CPU := $(patsubst -march=%,%,$(GENARCH))
 GENFLAGS += $(GENARCH)
@@ -164,14 +164,14 @@ endif
 GENFLAGS += -fPIC
 LDFLAGS  := -shared -fuse-ld=lld -Wl,-soname,libmain.so -Wl,--no-undefined -L$(ADEPS)/lib -lSDL3 -lavformat -lavcodec -lavutil -lswscale \
             -lopus -lshaderc_combined -lvulkan -landroid -lnativewindow -llog -ldl -lm -static-libstdc++
-# (AMD FSR y su generación de fotogramas son DLL de Windows: vk_amd_none.c, «no disponible»)
+# (AMD FSR and its frame generation are Windows DLLs: vk_amd_none.c, "not available")
 BACKEND_SRC := $(filter-out %/vk_fsr.cpp %/vk_fg.cpp,$(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp))
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
 UIFLAGS  := -x c++ $(OSFLAGS)
 GAMELIB  := $(B)/lasgame.so
-# (el código del juego llama a funciones del programa: con libmain.so como dependencia, el enlazador de Android las
-# resuelve contra la que ya está cargada; game_overrides.o el primero gana, como en Windows)
+# (the game code calls functions of the program: with libmain.so as a dependency, Android's linker resolves them against
+# the one already loaded; game_overrides.o first wins, as on Windows)
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld -Wl,-soname,lasgame.so -L$(B) -lmain -Wl,--allow-multiple-definition
 GAMELIB_SHARED := -shared
 endif
@@ -182,6 +182,10 @@ GAMELIB_SRCS := tools/game_addresses.py runtime/game_addresses/versions.h $(wild
                 tools/simd_c.py tools/rando/patch_variants.json tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
                 runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
+# GAMELIB_SAME: <this id>:<an earlier id>, the same code (only comments changed in between): the library keeps the earlier
+# id, so that one built then is not built again
+GAMELIB_SAME := 6029259eec512740:608e1007d774a82b 32709d08d68d4602:13b01a7623f0509e
+GAMELIB_ID := $(or $(patsubst $(GAMELIB_ID):%,%,$(filter $(GAMELIB_ID):%,$(GAMELIB_SAME))),$(GAMELIB_ID))
 # The library's own id adds the game's main build ID (what `make gen` generated from: $(GEN)/main/main_build_id.txt),
 # so game code for another game version is never loaded (runtime/gamelib.h gamelib_full_id)
 GAMELIB_BUILD := $(shell cut -c1-16 $(GEN)/main/main_build_id.txt 2>/dev/null)
@@ -195,8 +199,8 @@ GAMELIB_BASE_ID := $(shell (cat $(GAMELIB_BASE_SRCS); echo '$(GENFLAGS) $(GAMELI
 
 RT_OBJ   := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC)))
 # no path of this machine in what ships: debug info and __FILE__ name the checkout as "." (Windows: its C:/ form too)
-# ABSDIR: la carpeta real. Si lleva espacios, make se llama con CURDIR=. (todo lo demás, relativo) y CURDIR ya no la
-# nombra. Siempre entre comillas.
+# ABSDIR: the real folder. If it has spaces, make is called with CURDIR=. (everything else is relative) and CURDIR no
+# longer says it; the installer needs it for its path checks.
 ABSDIR   := $(shell pwd)
 PATHMAP  := '-ffile-prefix-map=$(ABSDIR)=.' $(if $(filter windows,$(PLATFORM)),'-ffile-prefix-map=$(shell cygpath -m '$(ABSDIR)')=.')
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS) $(PATHMAP)
@@ -215,7 +219,7 @@ $(B)/obj/tools/game_overrides.o: tools/game_overrides.c runtime/cpu.h
 $(B)/obj/tools/gamelib_entry.o: tools/gamelib_entry.c $(GAMELIB_SRCS) $(wildcard $(GEN)/main/main_build_id.txt)
 	@mkdir -p $(dir $@)
 	$(CC) $(GENFLAGS) -DGAMELIB_ID='"$(GAMELIB_FULL_ID)"' -c $< -o $@
-$(B)/rt/gamelib.o: $(GAMELIB_SRCS)
+$(B)/rt/gamelib.o: $(GAMELIB_SRCS) Makefile
 $(B)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
 # the start screen's build of it (runtime/gamebuild.c) uses the same flags
 $(B)/rt/gamebuild.o: $(GAMELIB_SRCS) $(GAMELIB_BASE_SRCS) Makefile
@@ -268,7 +272,7 @@ $(EXE): $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ)
 # its id file (<library>.id) says what it was built from without loading it (runtime/gamelib.c)
 $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	$(file >$@.rsp,$^)
-	$(CC) $(GAMELIB_LDFLAGS) -o $@.tmp @$@.rsp  # (los ~1.056 objetos por un archivo: en Windows una orden no pasa de 32 KB)
+	$(CC) $(GAMELIB_LDFLAGS) -o $@.tmp @$@.rsp  # (the ~1,056 objects through a file: on Windows a command cannot be over 32 KB)
 	mv -f $@.tmp $@
 	echo $(GAMELIB_FULL_ID) > $@.id
 	$(if $(GAMELIB_CPU),echo $(GAMELIB_CPU) > $@.cpu)
@@ -292,8 +296,8 @@ $(B)/imgui/imgui_impl_metal.o: $(IMGUI)/backends/imgui_impl_metal.mm
 # Python: tools/venv (macOS, Linux: bin/python, Windows: Scripts/python.exe)
 PY := $(firstword $(wildcard tools/venv/bin/python) $(wildcard tools/venv/Scripts/python.exe))
 
-# (SMRPG Android arm64: el juego movido GUEST_SHIFT bytes más abajo —runtime/guest_addr.h—: el código se genera para
-# las bases movidas y las funciones conservan sus nombres de siempre, gen.py --name-shift; en el resto, 0)
+# (SMRPG Android arm64: the game moved GUEST_SHIFT bytes lower -runtime/guest_addr.h-: the code is generated for the moved
+# bases and the functions keep their usual names, gen.py --name-shift; elsewhere, 0)
 GUEST_SHIFT ?= 0
 GEN_SDK_BASE  := $(shell printf '0x%x' $$((0x7005000000 - $(GUEST_SHIFT))))
 GEN_MAIN_BASE := $(shell printf '0x%x' $$((0x7000000000 - $(GUEST_SHIFT))))
@@ -307,11 +311,11 @@ gen-objs: $(GEN_OBJ)
 # Runtime objects only (no generated code, no link): quick compile check
 runtime-objs: $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ)
 
-# (SMRPG) la versión del recurso VERSIONINFO: el número de la primera entrada de VERSIONES.txt
-SMRPG_VERSION := $(shell sed -n 's/^Versi[^ ]* \([0-9][0-9]*\) .*/\1/p' VERSIONES.txt | head -1)
-$(B)/rt/platform/windows_rc.o: runtime/platform/windows.rc docs/icon/icon.ico runtime/platform/windows.manifest VERSIONES.txt
+# (SMRPG) the version of the VERSIONINFO resource: runtime/app_name.h
+SMRPG_VERNUM := $(shell sed -n 's/^\#define APP_VERSION "\([0-9.]*\).*/\1/p' runtime/app_name.h | tr '.' ',')
+$(B)/rt/platform/windows_rc.o: runtime/platform/windows.rc docs/icon/icon.ico runtime/platform/windows.manifest runtime/app_name.h
 	@mkdir -p $(dir $@)
-	$(WINDRES) -I docs/icon -I runtime/platform -DSMRPG_VERSION=$(or $(SMRPG_VERSION),0) -O coff $< -o $@
+	$(WINDRES) -I docs/icon -I runtime/platform '-DSMRPG_VERSION=$(SMRPG_VERNUM)' '-DSMRPG_VERSION_STR=\"$(APP_VER)\"' -O coff $< -o $@
 
 VERSION  := $(shell sed -n 's/^\#define LARECOMP_VERSION "\(.*\)"/\1/p' runtime/ui/launcher.mm)
 
@@ -367,7 +371,7 @@ dist:
 	cp README.md LICENSE "$(DIST)/"  # (licenses and source links of the bundled components: README "License")
 	cp -R build/helper/rando-gen "$(DIST)/"
 	PATH="$(ABSDIR)/build/deps-win/bin:$$PATH" ldd $(WIN_B)/lasrecomp.exe | sed -n 's/^.* => \(.*\) (0x[0-9a-f]*)$$/\1/p' | \
-	    grep -E 'ucrt64|deps-win' | grep -v vulkan-1 | sort -u | tr '\n' '\0' | xargs -0 -I{} cp -u {} "$(DIST)/"  # (rutas con espacios)
+	    grep -E 'ucrt64|deps-win' | grep -v vulkan-1 | sort -u | tr '\n' '\0' | xargs -0 -I{} cp -u {} "$(DIST)/"  # (paths with spaces)
 	! ls "$(DIST)" | grep -iE 'x264|x265|xvid|postproc'  # (no GPL codec libraries in the release)
 	# (no path of this machine inside: build/deps-win, debug info, zig's runtime. Not on CI: its paths name no one)
 	if [ "$${CI:-}" != true ]; then \
@@ -378,37 +382,37 @@ dist:
 	    else /c/Windows/System32/tar.exe -a -cf "LAS Recomp-$(VERSION)-windows.zip" "LAS Recomp"; fi
 	@echo "build/dist/LAS Recomp-$(VERSION)-windows.zip"
 
-# (SMRPG) El instalador para Windows: build/dist/SMRPG-Recomp-Instalador-<versión>.exe (tools/instalador). Una ventana
-# que pide la copia del juego ya extraída (la carpeta con exefs y romfs) y la carpeta, y que lleva dentro
-# el programa tal como se reparte, build/dist/SMRPG Recomp/: el ejecutable release (sin consola, con el FFmpeg
-# LGPL de `make deps-windows`), gamelib-src (con tools/game_overrides.c), las DLL que carga, las de AMD FSR (build/,
-# fuera del repositorio: third_party/amd-fsr/LEEME.txt), las fuentes, las licencias y construir\: construir.dll
-# (tools/instalador/construir.cpp: el generador en un Python embebido, clang y lld de MSYS2 como bibliotecas) con todo
-# lo que usa (tools/instalador/herramientas.sh). Nada del juego: el instalador pone allí la copia ya extraída de quien
-# instala y construye su código, DENTRO de su propio proceso (sin procesos hijos). Necesita en MSYS2 UCRT64 los
-# paquetes clang, lld y llvm (sus cabeceras y bibliotecas: pacman -S mingw-w64-ucrt-x86_64-llvm) y build/gen-venv
-# (`make build/gen-venv/.ok`: capstone, unicorn y lz4 para el generador).
+# (SMRPG) The Windows installer: build/dist/SMRPG-Recomp-Installer-<version>.exe (tools/installer). A window that asks for
+# the extracted copy of the game (the folder with exefs and romfs) and for the installation folder, and that carries
+# inside the program as it is distributed, build/dist/SMRPG Recomp/: the release executable (no console, with the LGPL
+# FFmpeg of `make deps-windows`), gamelib-src (with tools/game_overrides.c), the DLLs it loads, AMD FSR's (build/, outside
+# the repository: third_party/amd-fsr/README.txt), the fonts, the licenses and builder\: builder.dll
+# (tools/installer/game_builder.cpp: the generator in an embedded Python, MSYS2's clang and lld as libraries) with
+# everything it uses (tools/installer/toolchain.sh). Nothing from the game: the installer puts there the extracted copy of
+# whoever installs it and builds its code, INSIDE its own process (no child processes). It needs, in MSYS2 UCRT64, the
+# clang, lld and llvm packages (their headers and libraries: pacman -S mingw-w64-ucrt-x86_64-llvm) and build/gen-venv
+# (`make build/gen-venv/.ok`: capstone, unicorn and lz4 for the generator).
 APP_VER    := $(shell sed -n 's/^\#define APP_VERSION "\(.*\)"/\1/p' runtime/app_name.h)
 APP_VERNUM := $(shell echo '$(APP_VER)' | sed 's/-.*//; s/\./,/g'),0
 SMRPG_DIST := build/dist/SMRPG Recomp
-INST_EXE   := build/dist/SMRPG-Recomp-Instalador-$(APP_VER).exe
+INST_EXE   := build/dist/SMRPG-Recomp-Installer-$(APP_VER).exe
 INST_LIBS  := -static -lzstd -lcomctl32 -lcomdlg32 -lole32 -luuid -lshell32 -luser32 -lgdi32
-CONSTRUIR  := build/construir
-# (-fno-exceptions y NDEBUG, como LLVM release: su red de seguridad salta con longjmp, sin destructores por medio)
-$(CONSTRUIR)/construir.dll: tools/instalador/construir.cpp $(GAMELIB_SRCS) Makefile
-	@mkdir -p $(dir $@) build/tmp-construir  # (los temporales, fuera de lo que se reparte)
-	TMP="$$(cygpath -w build/tmp-construir)" TEMP="$$(cygpath -w build/tmp-construir)" \
+BUILDER    := build/builder
+# (-fno-exceptions and NDEBUG, as LLVM release: its safety net jumps with longjmp, with no destructors in between)
+$(BUILDER)/builder.dll: tools/installer/game_builder.cpp $(GAMELIB_SRCS) Makefile
+	@mkdir -p $(dir $@) build/tmp-builder  # (the temporary files, outside what is distributed)
+	TMP="$$(cygpath -w build/tmp-builder)" TEMP="$$(cygpath -w build/tmp-builder)" \
 	$(CXX) -O2 -std=c++17 -fno-exceptions -DNDEBUG -Wall -Wno-unused-function -shared $(PATHMAP) \
 	    '-DGAMELIB_ID="$(GAMELIB_ID)"' $< -o $@ -llldMinGW -llldCOFF -llldCommon -lclang-cpp -lLLVM-23 -lbcrypt -lpsapi
-instalador: build/gen-venv/.ok $(CONSTRUIR)/construir.dll
-	@[ -f build/deps-win/lib/libavcodec.dll.a ] || { echo "make deps-windows primero (el FFmpeg LGPL)"; exit 1; }
+installer: build/gen-venv/.ok $(BUILDER)/builder.dll
+	@[ -f build/deps-win/lib/libavcodec.dll.a ] || { echo "make deps-windows first (the LGPL FFmpeg)"; exit 1; }
 	@for d in loader upscaler framegeneration; do [ -f build/amd_fidelityfx_$${d}_vk.dll ] || \
-	    { echo "faltan las DLL de AMD FSR en build/ (third_party/amd-fsr/LEEME.txt)"; exit 1; }; done
+	    { echo "the AMD FSR DLLs are missing in build/ (third_party/amd-fsr/README.txt)"; exit 1; }; done
 	$(MAKE) B=$(WIN_B) DEPS=$(CURDIR)/build/deps-win RELEASE=1 $(WIN_B)/smrpg-recomp.exe
-	TMP="$$(cygpath -w build/tmp-construir)" TEMP="$$(cygpath -w build/tmp-construir)" tools/instalador/herramientas.sh $(CONSTRUIR)
-	rm -rf "$(SMRPG_DIST)" && mkdir -p "$(SMRPG_DIST)/gamelib-src" "$(SMRPG_DIST)/licencias"
+	TMP="$$(cygpath -w build/tmp-builder)" TEMP="$$(cygpath -w build/tmp-builder)" tools/installer/toolchain.sh $(BUILDER)
+	rm -rf "$(SMRPG_DIST)" && mkdir -p "$(SMRPG_DIST)/gamelib-src" "$(SMRPG_DIST)/licenses"
 	cp $(WIN_B)/smrpg-recomp.exe $(WIN_B)/smrpg-recomp.dll.a "$(SMRPG_DIST)/"
-	cp -R $(CONSTRUIR) "$(SMRPG_DIST)/construir"
+	cp -R $(BUILDER) "$(SMRPG_DIST)/builder"
 	cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
 	    tools/game_overrides.c "$(SMRPG_DIST)/gamelib-src/"
 	cp docs/icon/icon_512.png "$(SMRPG_DIST)/icon.png"
@@ -417,25 +421,26 @@ instalador: build/gen-venv/.ok $(CONSTRUIR)/construir.dll
 	cp build/amd_fidelityfx_loader_vk.dll build/amd_fidelityfx_upscaler_vk.dll build/amd_fidelityfx_framegeneration_vk.dll \
 	    "$(SMRPG_DIST)/"
 	PATH="$(ABSDIR)/build/deps-win/bin:$$PATH" ldd $(WIN_B)/smrpg-recomp.exe | sed -n 's/^.* => \(.*\) (0x[0-9a-f]*)$$/\1/p' | \
-	    grep -E 'ucrt64|deps-win' | grep -v vulkan-1 | sort -u | tr '\n' '\0' | xargs -0 -I{} cp -u {} "$(SMRPG_DIST)/"  # (rutas con espacios)
-	tools/instalador/licencias.sh "$(SMRPG_DIST)"  # (los textos de todo lo que va con él, y las fuentes que piden darse)
-	sed 's/@VERSION@/$(APP_VER)/' tools/instalador/LEEME-instalado.txt > "$(SMRPG_DIST)/LEEME.txt"
-	! ls "$(SMRPG_DIST)" | grep -iE 'x264|x265|xvid|postproc'  # (sin bibliotecas de códecs GPL)
+	    grep -E 'ucrt64|deps-win' | grep -v vulkan-1 | sort -u | tr '\n' '\0' | xargs -0 -I{} cp -u {} "$(SMRPG_DIST)/"  # (paths with spaces)
+	tools/installer/licenses.sh "$(SMRPG_DIST)"  # (the texts of everything that goes with it, and the sources that must be given)
+	sed 's/@VERSION@/$(APP_VER)/' tools/installer/README-installed.txt > "$(SMRPG_DIST)/README.txt"
+	sed 's/@VERSION@/$(APP_VER)/' tools/installer/README-installed.es.txt > "$(SMRPG_DIST)/LEEME.txt"
+	! ls "$(SMRPG_DIST)" | grep -iE 'x264|x265|xvid|postproc'  # (no GPL codec libraries)
 	! find "$(SMRPG_DIST)" -iname 'lasgame*' -o -iname '*.keys' -o -iname 'extracted' -o -iname 'romfs' -o -iname 'main.npdm' -o -iname 'Lossless*.dll' | grep .
-	mkdir -p build/instalador  # (ninguna ruta de este PC; sin patrones vacíos: uno vacío coincide con todo)
+	mkdir -p build/installer  # (no path of this PC; no empty patterns: an empty one matches everything)
 	{ echo "$(ABSDIR)"; cygpath -m '$(ABSDIR)'; cygpath -w '$(ABSDIR)'; \
 	  if [ -n "$${USERPROFILE:-}" ]; then cygpath -m "$$USERPROFILE"; cygpath -w "$$USERPROFILE"; \
-	  else echo "(sin USERPROFILE: la carpeta del usuario no se comprueba)" >&2; fi; } | grep . > build/instalador/rutas.txt
-	! grep -rlaiF -f build/instalador/rutas.txt "$(SMRPG_DIST)"
-	! grep -laiF -f build/instalador/rutas.txt Makefile LICENSE tools/instalador/*  # (lo de licencias/fuentes/instalador-fuente.zip, que va comprimido)
-	mkdir -p build/instalador && cp docs/icon/icon.ico build/instalador/
-	$(WINDRES) -I build/instalador -I tools/instalador -DINSTALADOR_VERSION_NUM=$(APP_VERNUM) \
-	    '-DINSTALADOR_VERSION_STR=\"$(APP_VER)\"' -O coff tools/instalador/instalador.rc -o build/instalador/instalador_res.o
-	TMP="$$(cygpath -w build/instalador)" TEMP="$$(cygpath -w build/instalador)" \
-	$(CC) -O2 -Wall -Wno-unused-function -municode -mwindows $(PATHMAP) '-DINSTALADOR_VERSION="$(APP_VER)"' \
-	    tools/instalador/instalador.c build/instalador/instalador_res.o -o build/instalador/instalador.exe $(INST_LIBS)  # (TMP: el de fuera puede llegar mal)
+	  else echo "(no USERPROFILE: the user's folder is not checked)" >&2; fi; } | grep . > build/installer/paths.txt
+	! grep -rlaiF -f build/installer/paths.txt "$(SMRPG_DIST)"
+	! grep -laiF -f build/installer/paths.txt Makefile LICENSE tools/installer/*  # (what goes in licenses/sources/installer-source.zip, which is compressed)
+	mkdir -p build/installer && cp docs/icon/icon.ico build/installer/
+	$(WINDRES) -I build/installer -I tools/installer -DINSTALLER_VERSION_NUM=$(APP_VERNUM) \
+	    '-DINSTALLER_VERSION_STR=\"$(APP_VER)\"' -O coff tools/installer/installer.rc -o build/installer/installer_res.o
+	TMP="$$(cygpath -w build/installer)" TEMP="$$(cygpath -w build/installer)" \
+	$(CC) -O2 -Wall -Wno-unused-function -municode -mwindows $(PATHMAP) '-DINSTALLER_VERSION="$(APP_VER)"' \
+	    tools/installer/installer.c build/installer/installer_res.o -o build/installer/installer.exe $(INST_LIBS)  # (TMP: the one from outside may arrive wrong)
 	rm -f "$(INST_EXE)"
-	build/instalador/instalador.exe --empaquetar "$$(cygpath -w '$(SMRPG_DIST)')" "$$(cygpath -w '$(INST_EXE)')"
+	build/installer/installer.exe --pack "$$(cygpath -w '$(SMRPG_DIST)')" "$$(cygpath -w '$(INST_EXE)')"
 	@ls -la "$(INST_EXE)"
 
 # Seed generator as a standalone helper, so players need no Python: build/helper/rando-gen/ (rando-gen[.exe] +
@@ -464,14 +469,14 @@ rando-helper: build/rando-venv/.ok
 
 # The game code generator, the same way (tools/lasgen.spec): build/helper/lasgen/, shipped as lasgen/ next to the exe or
 # in Contents/Resources. The start screen's setup runs it on the player's own game files (runtime/gamebuild.c).
-# (SMRPG) en su propio entorno (build/gen-venv): solo lo que pide el generador, sin el aleatorizador de LAS
+# (SMRPG) in its own environment (build/gen-venv): only what the generator asks for, without LAS's randomizer
 GEN_VPY := $(if $(filter windows,$(PLATFORM)),build/gen-venv/Scripts/python.exe,build/gen-venv/bin/python)
 gen-helper: build/gen-venv/.ok
 	$(if $(filter windows,$(PLATFORM)),USERPROFILE="$$(cygpath -w ~ 2>/dev/null || echo $$HOME)") \
 	$(GEN_VPY) -m PyInstaller --noconfirm --clean --log-level WARN --distpath build/helper --workpath build/pyinstaller \
 	    tools/lasgen.spec
 	$(if $(filter windows,$(PLATFORM)),$(GEN_VPY) tools/pe_no_cfg.py build/helper/lasgen/lasgen.exe)
-	echo $(GAMELIB_ID) > build/helper/lasgen.gamelib_id  # (de qué fuentes es: `make instalador` lo comprueba)
+	echo $(GAMELIB_ID) > build/helper/lasgen.gamelib_id  # (which sources it is from: `make installer` checks it)
 	@du -sh build/helper/lasgen
 
 build/gen-venv/.ok:
@@ -500,7 +505,7 @@ appimages:
 smoketest:
 	tools/linux/smoketest.sh
 
-.PHONY: dmg all gen gen-helper gen-objs runtime-objs deps deps-windows app dist instalador rando-helper appimage appimages smoketest
+.PHONY: dmg all gen gen-helper gen-objs runtime-objs deps deps-windows app dist installer rando-helper appimage appimages smoketest
 
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c

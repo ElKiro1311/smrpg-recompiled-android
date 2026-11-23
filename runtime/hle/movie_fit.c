@@ -1,32 +1,32 @@
-// (SMRPG) Los vídeos (las películas de CRI Sofdec) en una pantalla más ancha (o más alta) que 16:9.
+// (SMRPG) Movies (the CRI Sofdec videos) on a screen wider (or taller) than 16:9.
 //
-// El juego los pone con MoviePlayer: su RawImage m_image (+0x18), con el material de CRI que pinta cada imagen del vídeo,
-// y encima su Image m_fade_image (+0x50), el fundido a negro; las dos, recuadros 16:9 de 1280x720 que llenan su lienzo
-// (m_canvas, +0x48, de referencia 1280x720) en la consola. Con la pantalla ancha (hle/unity_screen.c) el lienzo ocupa
-// toda la pantalla, pero esas dos se quedan en el 16:9 del centro: el vídeo con bandas a los lados (y lo de detrás en
-// ellas) y los fundidos sin llegar a los lados.
-// «Vídeos en pantalla ancha» (Menú > Vídeo > Pantalla):
-//   - Bandas negras: el vídeo entero en el centro (los lados, negros con «Negro puro»: vulkan/exec.c lut_black_fix);
-//   - Llenar la pantalla: la RawImage crece con el aspecto del vídeo hasta cubrir el lienzo (en 21:9 se recorta arriba y
-//     abajo; en 16:10, a los lados). Nada se estira. Solo las películas: los vídeos en bucle (el fondo del título,
-//     movie_017.usm, con el logotipo pegado arriba y el castillo abajo, que se cortaban) se quedan en su 16:9. El bucle
-//     es el _loop (+0x80) de su CriManaMovieControllerForUI (m_player, +0x20); su archivo, _moviePath (+0x78), va al
-//     registro con cada vídeo nuevo (movie_001.usm: la apertura, sin bucle).
-// El fundido cubre todo el lienzo en los dos modos, para que oscurezca también los lados.
-// MoviePlayer.Update (main 0x7001c14dc0) solo se llama por puntero (Unity, cada imagen mientras hay un MoviePlayer
-// activo): hle_override lo envuelve y, tras el original, se ajustan las medidas con RectTransform.
-// SetSizeWithCurrentAnchors (crece por los dos lados, desde el centro). El tamaño del lienzo en sus unidades sale de
-// Canvas.pixelRect / Canvas.scaleFactor. La medida de partida es la que tiene la primera vez que se ve como un recuadro
-// 16:9 a toda la altura (o anchura) del lienzo; si el juego la cambia por su cuenta, la nueva pasa a ser la de partida.
-// Así cambiar el ajuste, el aspecto de la ventana o la pantalla ancha se aplica en marcha.
-// LARECOMP_LOG_MOVIE_FIT=1: las medidas que ve (las primeras veces).
+// The game plays them with MoviePlayer: its RawImage m_image (+0x18), with the CRI material that paints each video
+// frame, and on top of it its Image m_fade_image (+0x50), the fade to black; both are 1280x720 16:9 boxes that fill
+// their canvas (m_canvas, +0x48, 1280x720 reference) on the console. In widescreen (hle/unity_screen.c) the canvas
+// takes up the whole screen, but those two stay in the central 16:9: the movie with bars at the sides (and whatever is
+// behind showing in them) and the fades not reaching the sides.
+// "Widescreen movies" (Menu > Video > Display):
+//   - Black bars: the whole movie in the center (the sides, black with "True black": vulkan/exec.c lut_black_fix);
+//   - Fill the screen: the RawImage grows at the movie's aspect ratio until it covers the canvas (on 21:9 it is cropped
+//     at the top and bottom; on 16:10, at the sides). Nothing is stretched. Movies only: the looping videos (the title
+//     background, movie_017.usm, with the logo right at the top and the castle at the bottom, which were being cut off)
+//     stay in their 16:9. The loop is the _loop (+0x80) of its CriManaMovieControllerForUI (m_player, +0x20); its file,
+//     _moviePath (+0x78), goes to the log with each new video (movie_001.usm: the opening, no loop).
+// The fade covers the whole canvas in both modes, so that it darkens the sides too.
+// MoviePlayer.Update (main 0x7001c14dc0) is only called through a pointer (Unity, every frame while a MoviePlayer is
+// active): hle_override wraps it and, after the original, the sizes are adjusted with
+// RectTransform.SetSizeWithCurrentAnchors (it grows on both sides, from the center). The canvas size in its own units
+// comes from Canvas.pixelRect / Canvas.scaleFactor. The base size is the one it has the first time it is seen as a 16:9
+// box spanning the full height (or width) of the canvas; if the game changes it on its own, the new one becomes the
+// base. That way changing the setting, the window's aspect ratio or widescreen takes effect on the fly.
+// LARECOMP_LOG_MOVIE_FIT=1: the sizes it sees (the first few times).
 //
-// (SMRPG 0.49) El fundido de las transiciones, GS.Fade (el negro al entrar en una zona desde el mapa, al entrar en una
-// casa...), tiene el mismo problema: su Image m_image (+0x30) es un recuadro 16:9 a toda la altura del lienzo, y en una
-// pantalla ancha los lados quedaban sin cubrir: se veía el color de fondo de la cámara mientras carga la zona (caqui) o
-// la zona nueva antes de tiempo (visto en un vídeo de una prueba del 2026-11-17; ruta de prueba: la partida en wld00, el mapa, y A).
-// GS.Fade.Update (main 0x7001959d70, solo por puntero) se envuelve igual: tras el original, la Image cubre todo su
-// lienzo (Graphic.get_canvas). En 16:9 no cambia nada.
+// (SMRPG 0.49) The transition fade, GS.Fade (the black when entering an area from the map, when entering a house...),
+// has the same problem: its Image m_image (+0x30) is a 16:9 box spanning the full height of the canvas, and on a wide
+// screen the sides were left uncovered: you could see the camera's background color while the area loads (khaki) or the
+// new area too early (seen in a video of a test on 2026-11-17; test route: the save in wld00, the map, and A).
+// GS.Fade.Update (main 0x7001959d70, only through a pointer) is wrapped the same way: after the original, the Image
+// covers its whole canvas (Graphic.get_canvas). At 16:9 nothing changes.
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,9 +37,9 @@
 
 #define MP_UPDATE GADDR(0x7001c14dc0ull)               // MoviePlayer.Update
 #define GRAPHIC_RECT_TRANSFORM GADDR(0x7001c459f0ull)  // Graphic.get_rectTransform
-#define RT_GET_RECT GADDR(0x70017a5670ull)             // RectTransform.get_rect -> (x, y, ancho, alto) en s0-s3
-#define RT_SET_SIZE GADDR(0x70017a6f20ull)             // RectTransform.SetSizeWithCurrentAnchors(Axis eje, float tamaño)
-#define CANVAS_PIXEL_RECT GADDR(0x70022fafd0ull)       // Canvas.get_pixelRect -> (x, y, ancho, alto) en píxeles, en s0-s3
+#define RT_GET_RECT GADDR(0x70017a5670ull)             // RectTransform.get_rect -> (x, y, width, height) in s0-s3
+#define RT_SET_SIZE GADDR(0x70017a6f20ull)             // RectTransform.SetSizeWithCurrentAnchors(Axis axis, float size)
+#define CANVAS_PIXEL_RECT GADDR(0x70022fafd0ull)       // Canvas.get_pixelRect -> (x, y, width, height) in pixels, in s0-s3
 #define CANVAS_SCALE GADDR(0x70022fb080ull)            // Canvas.get_scaleFactor -> s0
 #define FADE_UPDATE GADDR(0x7001959d70ull)             // GS.Fade.Update
 #define GRAPHIC_CANVAS GADDR(0x7001c451f0ull)          // Graphic.get_canvas
@@ -58,12 +58,12 @@ static void set_sreg(Cpu *c, int n, float f) {
     c->v[n] = b;
 }
 static void gcall(Cpu *c, GuestFn f) {
-    c->x[30] = MP_UPDATE;  // (una dirección del juego como retorno, para las trazas)
+    c->x[30] = MP_UPDATE;  // (a game address as the return address, for traces)
     f(c);
 }
-static bool alive(uint64_t o) { return o && LD64(o + 0x10); }  // (un UnityEngine.Object con su objeto nativo: m_CachedPtr)
+static bool alive(uint64_t o) { return o && LD64(o + 0x10); }  // (a UnityEngine.Object with its native object: m_CachedPtr)
 
-// El tamaño del lienzo en sus unidades (las de los RectTransform de dentro); false si no se puede saber
+// The canvas size in its own units (those of the RectTransforms inside it); false if it can't be determined
 static bool canvas_size(Cpu *c, uint64_t canvas, float *cw, float *ch) {
     if (!alive(canvas)) return false;
     c->x[0] = canvas, c->x[1] = 0;
@@ -83,11 +83,11 @@ static void set_size(Cpu *c, uint64_t rt, int axis, float v) {
     gcall(c, f_set_size);
 }
 
-enum { FIT_MOVIE, FIT_COVER, FIT_FADE };  // (FIT_FADE: como FIT_COVER, el fundido de GS.Fade, con su línea en el registro)
-typedef struct { uint64_t obj; float w0, h0, w1, h1; } Fit;  // (la medida de partida y la última puesta)
+enum { FIT_MOVIE, FIT_COVER, FIT_FADE };  // (FIT_FADE: like FIT_COVER, the GS.Fade fade, with its own log line)
+typedef struct { uint64_t obj; float w0, h0, w1, h1; } Fit;  // (the base size and the last one set)
 static Fit fits[16];
 static int nfit, next_slot;
-RT_ON_RESET(movie_fit_reset) { nfit = 0, next_slot = 0; }  // (objetos de antes de reiniciar el juego dentro del proceso)
+RT_ON_RESET(movie_fit_reset) { nfit = 0, next_slot = 0; }  // (objects from before an in-process restart of the game)
 
 static void fit(Cpu *c, uint64_t g, int kind, float cw, float ch, bool loop) {
     if (!alive(g)) return;
@@ -100,18 +100,18 @@ static void fit(Cpu *c, uint64_t g, int kind, float cw, float ch, bool loop) {
     float w = sreg(c, 2), h = sreg(c, 3);
     const double a = 16.0 / 9.0, ca = (double)cw / ch;
     bool wide = ca > a * 1.01, tall = ca < a * 0.99;
-    // (un recuadro 16:9 que llena el lienzo a lo alto en una pantalla ancha, o a lo ancho en una más alta)
+    // (a 16:9 box that fills the canvas vertically on a wide screen, or horizontally on a taller one)
     bool box = h > 0 && fabs(w / h - a) < 0.01 * a && (tall ? fabsf(w - cw) < 0.02f * cw : fabsf(h - ch) < 0.02f * ch);
-    if (dbg > 0) dbg--, LOG("[vídeo] %s %#llx: %.1fx%.1f en un lienzo de %.1fx%.1f\n", kind == FIT_MOVIE ? "imagen" : "fundido",
+    if (dbg > 0) dbg--, LOG("[video] %s %#llx: %.1fx%.1f on a %.1fx%.1f canvas\n", kind == FIT_MOVIE ? "image" : "fade",
                             (unsigned long long)g, w, h, cw, ch);
     int k = -1;
     for (int i = 0; i < nfit; i++) if (fits[i].obj == g) k = i;
     if (k < 0) {
         if (!box || (!wide && !tall)) return;
         if (nfit < (int)(sizeof fits / sizeof fits[0])) k = nfit++;
-        else k = next_slot, next_slot = (next_slot + 1) % (int)(sizeof fits / sizeof fits[0]);  // (la más vieja)
+        else k = next_slot, next_slot = (next_slot + 1) % (int)(sizeof fits / sizeof fits[0]);  // (the oldest one)
         fits[k] = (Fit){g, w, h, w, h};
-    } else if (fabsf(w - fits[k].w1) > 1 || fabsf(h - fits[k].h1) > 1) {  // (la cambió el juego: esa es la de partida)
+    } else if (fabsf(w - fits[k].w1) > 1 || fabsf(h - fits[k].h1) > 1) {  // (the game changed it: that's the base size)
         if (!box) {
             fits[k] = fits[--nfit];
             if (next_slot >= nfit) next_slot = 0;
@@ -120,12 +120,12 @@ static void fit(Cpu *c, uint64_t g, int kind, float cw, float ch, bool loop) {
         fits[k].w0 = w, fits[k].h0 = h;
     }
     float tw = fits[k].w0, th = fits[k].h0;
-    // (la medida de partida debe llenar el lienzo de ahora: al cambiar de vídeo, un fotograma da el lienzo sin su escala,
-    // 2560x1080 en vez de 1707x720, y con él el vídeo salía 1,5 veces más grande ese fotograma)
+    // (the base size must fill the current canvas: when the video changes, one frame gives the canvas without its
+    // scale, 2560x1080 instead of 1707x720, and with it the video came out 1.5 times larger for that frame)
     if (tall ? fabsf(tw - cw) > 0.02f * cw : fabsf(th - ch) > 0.02f * ch) return;
-    if (kind == FIT_COVER || kind == FIT_FADE) {  // el fundido: todo el lienzo
+    if (kind == FIT_COVER || kind == FIT_FADE) {  // the fade: the whole canvas
         if (wide || tall) tw = cw, th = ch;
-    } else if (g_settings.movie_fit && !loop) {  // el vídeo: cubrir el lienzo con su aspecto (no el fondo del título)
+    } else if (g_settings.movie_fit && !loop) {  // the video: cover the canvas at its aspect (not the title background)
         if (wide) tw = cw, th = (float)(cw / a);
         else if (tall) th = ch, tw = (float)(ch * a);
     }
@@ -135,12 +135,12 @@ static void fit(Cpu *c, uint64_t g, int kind, float cw, float ch, bool loop) {
     if (change && kind == FIT_MOVIE) {
         static int nlog;
         if (nlog++ < 12)
-            LOG("[vídeo] %s: %.0fx%.0f -> %.0fx%.0f (lienzo de %.0fx%.0f)\n",
-                g_settings.movie_fit && !loop && (wide || tall) ? "llenar la pantalla" : "en su 16:9", w, h, tw, th, cw, ch);
+            LOG("[video] %s: %.0fx%.0f -> %.0fx%.0f (%.0fx%.0f canvas)\n",
+                g_settings.movie_fit && !loop && (wide || tall) ? "fill the screen" : "in its 16:9", w, h, tw, th, cw, ch);
     }
     if (change && kind == FIT_FADE) {
         static int nlog;
-        if (nlog++ < 6) LOG("[fundido] GS.Fade: %.0fx%.0f -> %.0fx%.0f (todo el lienzo)\n", w, h, tw, th);
+        if (nlog++ < 6) LOG("[fade] GS.Fade: %.0fx%.0f -> %.0fx%.0f (the whole canvas)\n", w, h, tw, th);
     }
     fits[k].w1 = tw, fits[k].h1 = th;
 }
@@ -150,16 +150,16 @@ static void movie_update(Cpu *c) {
     mp_update(c);
     float cw, ch;
     bool loop = false;
-    if (alive(self)) {  // (cada vídeo nuevo, una línea: su archivo y si va en bucle)
+    if (alive(self)) {  // (one line per new video: its file and whether it loops)
         static uint64_t last_path;
         uint64_t pl = LD64(self + 0x20), path = pl ? LD64(pl + 0x78) : 0;
-        loop = pl && (LD8(pl + 0x80) & 1);  // (CriManaMovieMaterial._loop: el fondo del título, movie_017)
+        loop = pl && (LD8(pl + 0x80) & 1);  // (CriManaMovieMaterial._loop: the title background, movie_017)
         if (path != last_path) {
             last_path = path;
             char s[96] = {0};
             int n = path ? (int)LD32(path + 0x10) : 0;
             for (int i = 0; i < n && i < 95; i++) s[i] = (char)LD16(path + 0x14 + 2 * i);
-            LOG("[vídeo] %s, bucle %d\n", s, pl ? LD8(pl + 0x80) : -1);
+            LOG("[video] %s, loop %d\n", s, pl ? LD8(pl + 0x80) : -1);
         }
     }
     if (alive(self) && canvas_size(c, LD64(self + 0x48), &cw, &ch)) {
@@ -170,7 +170,7 @@ static void movie_update(Cpu *c) {
     c->x[30] = ret;
 }
 
-// GS.Fade.Update: tras el original, su Image (m_image, +0x30) cubre todo su lienzo
+// GS.Fade.Update: after the original, its Image (m_image, +0x30) covers its whole canvas
 static void fade_update(Cpu *c) {
     uint64_t self = c->x[0], ret = c->x[30];
     fade_update_orig(c);
@@ -185,7 +185,7 @@ static void fade_update(Cpu *c) {
     c->x[30] = ret;
 }
 
-// (main.c, tras dispatch_init: antes de que el juego corra)
+// (main.c, after dispatch_init: before the game runs)
 void smrpg_movie_fit_init(void) {
     dbg = getenv("LARECOMP_LOG_MOVIE_FIT") ? 40 : 0;
     mp_update = dispatch_lookup(MP_UPDATE);
@@ -197,14 +197,14 @@ void smrpg_movie_fit_init(void) {
     fade_update_orig = dispatch_lookup(FADE_UPDATE);
     f_canvas = dispatch_lookup(GRAPHIC_CANVAS);
     if (!mp_update || !f_rect_transform || !f_get_rect || !f_set_size || !f_pixel_rect || !f_scale) {
-        LOG("[vídeo] faltan funciones del juego: los vídeos se quedan en su 16:9\n");
+        LOG("[video] game functions missing: movies stay in their 16:9\n");
         return;
     }
-    static bool registered;  // (boot() se repite en un reinicio dentro del proceso; hle_override solo añade)
+    static bool registered;  // (boot() runs again on an in-process restart; hle_override only adds)
     if (!registered) {
         registered = true;
         hle_override(MP_UPDATE, movie_update, "MoviePlayer.Update");
         if (fade_update_orig && f_canvas) hle_override(FADE_UPDATE, fade_update, "GS.Fade.Update");
-        else LOG("[fundido] faltan funciones del juego: el fundido de las transiciones se queda en su 16:9\n");
+        else LOG("[fade] game functions missing: the transitions' fade stays in its 16:9\n");
     }
 }

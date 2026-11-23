@@ -1,6 +1,7 @@
-// (SMRPG Android) AMD FSR y su generación de fotogramas (vk_fsr.cpp, vk_fg.cpp) son las DLL del SDK de AMD para
-// Windows: aquí no hay. Lo mismo hacia fuera que sin las DLL en Windows: «no disponible», una cola, la swapchain normal.
-#ifndef _WIN32  // (en Windows están las de verdad, vk_fsr.cpp y vk_fg.cpp)
+// (SMRPG Android) AMD FSR and its frame generation (vk_fsr.cpp, vk_fg.cpp) are the AMD SDK's DLLs for Windows: there
+// are none here. Outwardly the same as without the DLLs on Windows: "not available", one queue, the normal swapchain.
+#ifndef _WIN32  // (on Windows there are the real ones, vk_fsr.cpp and vk_fg.cpp)
+#include "../../ui/tr.h"
 #include "vk_fg.h"
 #include "vk_fsr.h"
 
@@ -21,11 +22,11 @@ void vk_fsr_jitter(uint64_t index, uint32_t render_w, uint32_t display_w, float 
 void vk_fsr_record(VkCommandBuffer cb, const void *dispatch) { (void)cb, (void)dispatch; }
 void vk_fsr_release(void) {}
 void vk_fsr_set_queue(VkQueue q) { (void)q; }
-const char *vk_fsr_status(void) { return "no disponible en Android (AMD FSR es para Windows)"; }
+const char *vk_fsr_status(void) { return tr("not available on Android (AMD FSR is for Windows)"); }
 uint64_t vk_fsr_vram(void) { return 0; }  // (runtime/perf_meter.c)
 uint64_t vk_fg_vram(void) { return 0; }
 
-// (vk_fg_hudless_wanted y vk_fg_hudless son de device.c)
+// (vk_fg_hudless_wanted and vk_fg_hudless are in device.c)
 bool vk_fg_dll(void) { return false; }
 uint32_t vk_fg_queue_count(void) { return 1; }
 void vk_fg_queues(VkQueue game, uint32_t family, VkQueue present, VkQueue acquire) {
@@ -56,5 +57,5 @@ void vk_fg_prepare_record(VkCommandBuffer cb, const void *prepare) { (void)cb, (
 void vk_fg_frame_end_record(VkCommandBuffer cb, const void *unused) { (void)cb, (void)unused; }
 void vk_fg_wait_presents(void) {}
 void vk_fg_release(void) {}
-const char *vk_fg_status(void) { return "no disponible en Android (la generación de fotogramas de AMD es para Windows)"; }
+const char *vk_fg_status(void) { return tr("not available on Android (AMD frame generation is for Windows)"); }
 #endif

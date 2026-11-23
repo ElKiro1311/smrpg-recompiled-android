@@ -126,7 +126,7 @@ typedef struct {
     char cc[1100];                     // compiler: zig (as `zig cc`), or LARECOMP_CC / clang
     bool zig;
     char inc[1100], entry[1100], hle[1100];  // headers the game code includes, tools/gamelib_entry.c, HLE names
-    char overrides[1100];  // (SMRPG) tools/game_overrides.c: funciones del juego sustituidas (enlazadas antes)
+    char overrides[1100];  // (SMRPG) tools/game_overrides.c: overridden game functions (linked first)
 #ifdef _WIN32
     char implib[1100];  // the .exe's import library (the runtime functions the game code calls)
     char zig_rt[1100];  // the release's zig: its runtime built ahead of time (zig/rt, tools/zig_slim.sh), "" = none
@@ -162,12 +162,12 @@ static bool find_tools(Tools *t) {
     if (b > s) s = b;
     if (s) *s = 0;
 #ifdef _WIN32
-    // (SMRPG) la biblioteca de importación del ejecutable de este port (el nombre con el que el código del juego lo carga)
+    // (SMRPG) the import library of this port's executable (the name the game code loads it by)
     if (!rt_resource("smrpg-recomp.dll.a", "build/smrpg-recomp.dll.a", t->implib, sizeof t->implib)) return false;
     t->zig_rt[0] = 0;
     if (t->zig) {
-        // (SMRPG) el zig adelgazado, con su rt/ (tools/zig_slim.sh): el que se reparte, junto al ejecutable; en una copia
-        // de trabajo, build/zig es el completo (sin rt/) y el adelgazado está en build/zig-slim
+        // (SMRPG) the slimmed-down zig, with its rt/ (tools/zig_slim.sh): the one that ships, next to the executable;
+        // in a working copy, build/zig is the full one (no rt/) and the slimmed-down one is in build/zig-slim
         char rsp[1100];
         if (!rt_resource("zig" SEP "rt" SEP "link.rsp", NULL, rsp, sizeof rsp)) {
             if (!e && rt_resource(NULL, "build/zig-slim/rt/link.rsp", rsp, sizeof rsp))
@@ -177,7 +177,7 @@ static bool find_tools(Tools *t) {
         char *s = strrchr(rsp, '/'), *b = strrchr(rsp, '\\');
         if (b > s) s = b;
         if (s) *s = 0, snprintf(t->zig_rt, sizeof t->zig_rt, "%s", rsp);
-        // sin él no se pueden enlazar las sustituciones (gamebuild_run): sin herramientas, como dice gamebuild_available
+        // without it the overrides cannot be linked (gamebuild_run): no tools, as gamebuild_available says
         if (!t->zig_rt[0]) return false;
     }
 #endif
@@ -323,10 +323,10 @@ static void add_cflags(Args *a, const Tools *t) {
             for (char *c = cpu + 6; *c; c++) if (*c == '-') *c = '_';
             add(a, cpu);
         } else if (t->zig && f[0] == '-' && f[1] == 'O') {
-            // (SMRPG) `zig cc` toma -O1..-O3 como su modo ReleaseFast y le pasa a clang -O2, con el puntero de marco en
-            // todas las funciones: el nivel pedido, otra vez al final de lo que recibe clang (gana el último), y sin
-            // puntero de marco, como `make` con clang -O1. Medido: main_189.c (una función enorme) tardaba ~18 min con
-            // el -O2 de zig y la construcción entera 20; así, 170 s.
+            // (SMRPG) `zig cc` takes -O1..-O3 as its ReleaseFast mode and passes -O2 to clang, with the frame pointer
+            // in every function: the requested level, again at the end of what clang receives (the last one wins), and
+            // no frame pointer, like `make` with clang -O1. Measured: main_189.c (one huge function) took ~18 min with
+            // zig's -O2 and the whole build 20; this way, 170 s.
             add(a, f);
             add(a, "-Xclang");
             add(a, f);
@@ -374,8 +374,9 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         return false;
     }
 #ifdef _WIN32
-    // (SMRPG) las sustituciones de game_overrides necesitan enlazar con varias definiciones (la primera gana): `zig cc`
-    // no deja pasar esa opción al enlazador; el zig que se reparte (tools/zig_slim.sh) enlaza con lld-link directamente
+    // (SMRPG) the overrides in game_overrides need linking with multiple definitions (the first one wins): `zig cc`
+    // does not let that option through to the linker; the zig that ships (tools/zig_slim.sh) links with lld-link
+    // directly
     if (t.zig && !t.zig_rt[0]) {
         snprintf(why, why_size, "the bundled compiler has no prebuilt runtime (zig/rt from tools/zig_slim.sh)");
         return false;
@@ -393,7 +394,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     // Compiler/header/flag changes invalidate every object; entry always rebuilds because it embeds the library id.
     const char *inputs[] = {input_paths[2], input_paths[3], input_paths[4], input_paths[5], t.cc};
     // The compiler's contents identify it, so relocating the app does not discard reusable objects.
-    // (SMRPG: "zig-O": el nivel de optimización forzado en zig, add_cflags; los objetos de antes eran -O2)
+    // (SMRPG: "zig-O": the optimization level forced on zig, add_cflags; the earlier objects were -O2)
     snprintf(spec, sizeof spec, "LASBUILD3 zig-O\n%s\n%s\n%s\nzig=%d pointer=%d%s%s\n", GAMELIB_BASE_ID,
              GAMELIB_CFLAGS, GAMELIB_SHARED, t.zig, (int)sizeof(void *),  // (+ the Linux zig target: objects from
              t.zig && ZIG_TARGET[0] ? " target=" : "", t.zig ? ZIG_TARGET : "");  // before it are rebuilt once)
@@ -433,7 +434,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
 
     // 1. the generator, both modules at once; their finished files are compiled while it goes on
     Gen gens[2] = {{.name = "main"}, {.name = "sdk"}};
-    static char base[2][24], shift[24];  // (SMRPG: rt.h MAIN_BASE / SDK_BASE; Android arm64: movidas, guest_addr.h)
+    static char base[2][24], shift[24];  // (SMRPG: rt.h MAIN_BASE / SDK_BASE; Android arm64: moved, guest_addr.h)
     snprintf(base[0], sizeof base[0], "%#llx", (unsigned long long)MAIN_BASE);
     snprintf(base[1], sizeof base[1], "%#llx", (unsigned long long)SDK_BASE);
     snprintf(shift, sizeof shift, "%#llx", (unsigned long long)GUEST_SHIFT);
@@ -475,8 +476,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     double shown = 0;
     {
         add_unit(&units, t.entry, work, "gamelib_entry");
-        // (SMRPG) las sustituciones, antes que todo el código generado en el enlace: con varias definiciones de una
-        // función, el enlazador se queda con la primera (como el Makefile: game_overrides.o primero)
+        // (SMRPG) the overrides, ahead of all the generated code in the link: with multiple definitions of a function,
+        // the linker keeps the first one (like the Makefile: game_overrides.o first)
         add_unit(&units, t.overrides, work, "game_overrides");
     }
     while (ok) {
@@ -566,8 +567,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         double comp_frac = est_total > 0 ? (double)done_bytes / est_total : 0;
         if (comp_frac > 1) comp_frac = 1;
         if (gens_done && units.n) {
-            // (SMRPG) los bytes engañan al final: lo último son funciones enormes, una por archivo, que tardan mucho
-            // más por byte (en SMRPG la barra se quedaba en el 88 % la mitad de la compilación): mitad bytes, mitad archivos
+            // (SMRPG) bytes are misleading at the end: what comes last is huge functions, one per file, which take much
+            // longer per byte (in SMRPG the bar sat at 88% for half the compilation): half bytes, half files
             comp_frac = 0.5 * comp_frac + 0.5 * (double)(reused + compiled) / (double)units.n;
         }
         // (an update that keeps the last build's pieces compiles little: generating the C is most of its time)
@@ -611,7 +612,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
             add(&a, opt);
             snprintf(opt, sizeof opt, "-OUT:%s", tmp);
             add(&a, opt);
-            add(&a, "-FORCE:MULTIPLE");  // (SMRPG: game_overrides, la primera definición)
+            add(&a, "-FORCE:MULTIPLE");  // (SMRPG: game_overrides, the first definition)
             add(&a, at);
             add(&a, t.implib);
         } else
@@ -619,7 +620,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         {
             compiler(&a, &t);
             add_split(&a, GAMELIB_SHARED);
-            add(&a, "-Wl,--allow-multiple-definition");  // (SMRPG: game_overrides, la primera definición)
+            add(&a, "-Wl,--allow-multiple-definition");  // (SMRPG: game_overrides, the first definition)
             add(&a, "-o");
             add(&a, tmp);
             add(&a, at);

@@ -43,9 +43,9 @@ typedef struct {
     uint8_t topo;            // primitive class: 0 points, 1 lines, 2 triangles
     uint8_t poly_fill;       // filled polygons (0: lines)
     uint32_t local[3];       // compute: local size
-    // (SMRPG Android) la profundidad fija en la tubería (exec.c g_dyn_depth = 0, GPU de Qualcomm): 1 | prueba << 1 |
-    // escritura << 2 | comparación (VkCompareOp) << 3; 0 donde va como estado dinámico (y en las líneas de antes).
-    // En el texto, « z=<hex>» solo si no es 0: las líneas de las otras GPU quedan como antes.
+    // (SMRPG Android) the depth state baked into the pipeline (exec.c g_dyn_depth = 0, Qualcomm GPUs): 1 | test << 1 |
+    // write << 2 | compare (VkCompareOp) << 3; 0 where it goes as dynamic state (and in older lines).
+    // In the text, " z=<hex>" only if it isn't 0: the lines of the other GPUs stay as before.
     uint8_t zs;
 } ShaderRec;
 
@@ -92,16 +92,16 @@ char *shader_seen_read(uint64_t *file_game);
 void shader_seen_prep_done(uint64_t game, const char *keep);
 const char *shader_prep_shipped_list(void);  // the shipped list's text
 
-// (SMRPG) La copia propia del código de cada sombreador que el juego usa: cache/shader_code/<huella>.bin en la carpeta
-// de datos. SMRPG es de Unity: sus sombreadores van comprimidos dentro de los .bundle, y el índice de los archivos del
-// juego de la preparación (hecho para Link's Awakening) no encuentra ninguno; sin el código, la lista propia no servía.
-// La nota (hilo de render, una vez por sombreador y proceso) copia los bytes que dan la huella (hasta el final de sus
-// constantes) y el hilo de shader_seen.c los escribe aparte (cada archivo entero o nada: shader_cache_write); la
-// preparación los lee si el índice no los tiene, comprobando la huella. Solo en el equipo del jugador: es su juego y
-// nunca se distribuye (como la caché de SPIR-V). Con LARECOMP_SHADER_SEEN=0, nada.
+// (SMRPG) Our own copy of the code of every shader the game uses: cache/shader_code/<hash>.bin in the data folder.
+// SMRPG is a Unity game: its shaders are compressed inside the .bundle files, and the preparation's index of the game
+// files (made for Link's Awakening) finds none of them; without the code, the player's own list was no use. The note
+// (render thread, once per shader and process) copies the hashed bytes (up to the end of its constants) and the
+// shader_seen.c thread writes them separately (each file whole or not at all: shader_cache_write); the preparation
+// reads them if the index doesn't have them, checking the hash. Only on the player's machine: it is their game and it
+// is never distributed (like the SPIR-V cache). With LARECOMP_SHADER_SEEN=0, nothing.
 void shader_code_note(uint64_t hash, const struct NvnShaderStage *s);
 struct ShaderBlobS;
-uint8_t *shader_code_read(uint64_t hash, struct ShaderBlobS *b);  // el código (liberar con free) o NULL; rellena b
+uint8_t *shader_code_read(uint64_t hash, struct ShaderBlobS *b);  // the code (release it with free) or NULL; fills in b
 
 // First visits: a program / pipeline / compute program the game had to build itself (preparation didn't cover it).
 // what: "program", "pipeline", "compute"; a, b: its shaders' hashes; id: what it is (logged once per process)
@@ -135,9 +135,9 @@ void renderer_prepare_end(void);  // all builds done (e.g. keep the pipeline cac
 // when it couldn't start (no list, no GPU device).
 bool shader_prep_run(const char *romfs, void (*progress)(int done, int total), const volatile int *cancel);
 // (LARECOMP_SHADER_PREP=1, tests) the same at game start, before the game's first frame: runtime/nvn/objects.c
-// (SMRPG, sin la pantalla de inicio) sin la variable, la misma preparación en segundo plano en cada arranque, con solo
-// la lista propia (shader_variants.txt es la de Link's Awakening) y el código de cache/shader_code: lo que el juego ya
-// usó en sesiones anteriores queda listo mientras salen los logos y el título. LARECOMP_SHADER_PREP=0: nada.
+// (SMRPG, with no start screen) without the variable, the same preparation in the background on every start, with only
+// the player's own list (shader_variants.txt is Link's Awakening's) and the code from cache/shader_code: what the game
+// already used in earlier sessions is ready while the logos and the title are showing. LARECOMP_SHADER_PREP=0: nothing.
 void shader_prep_boot(const char *romfs);
 
 // ---- the shader caches' tag (Metal binary archive, Vulkan pipeline cache): this build, the translator, the prepared

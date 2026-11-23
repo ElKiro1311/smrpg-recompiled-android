@@ -19,8 +19,8 @@ typedef struct GameAddrs {
 
 // The selected table (NULL until game_version_select succeeds).
 extern const GameAddrs *g_ga;
-// SMRPG: false. Las direcciones de la tabla (GA) son de Link's Awakening 1.0.0 y en SMRPG no apuntan a nada suyo:
-// las funciones del runtime propias de LA (trucos, editor de partida, viajes, nombre del nivel...) no deben leerlas.
+// SMRPG: false. The addresses in the table (GA) are Link's Awakening 1.0.0's and in SMRPG they point at nothing of its
+// own: the runtime's LA-specific functions (cheats, save editor, warps, level name...) must not read them.
 extern bool g_game_las;
 #define GA(name) (g_ga->name)
 // For tables built at compile time: GA_FIELD(NAME) there, GA_AT(field) to read the selected version's address.

@@ -112,8 +112,8 @@ static void base_close(void) {
 static void base_open(void) {
     if (g_base_open) return;
     char path[1100], why[256] = "";
-    // SMRPG: basta con que exista la carpeta romfs/ (antes se miraba region_common/, una carpeta de Link's Awakening;
-    // la de SMRPG empieza por Data/).
+    // SMRPG: it is enough for the romfs/ folder to exist (it used to look for region_common/, a Link's Awakening
+    // folder; SMRPG's starts with Data/).
     struct stat sb;
     if (stat(g_romfs_dir, &sb) == 0 && S_ISDIR(sb.st_mode) && romfs_layout(g_romfs_dir, &g_base, why, sizeof why)) {
         LOG("[fs] romfs: %d files served from %s\n", g_base.nfiles, g_romfs_dir);

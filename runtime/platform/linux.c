@@ -278,7 +278,7 @@ int plat_cpu_count(void) {
 
 void plat_thread_guest(int prio) { (void)prio; }  // (the OS's default scheduling serves the game here)
 
-// (SMRPG: para ver quién gasta la CPU: «top -H» y /proc enseñan este nombre. Linux/Android aceptan hasta 15.)
+// (SMRPG: to see who uses the CPU: "top -H" and /proc show this name. Linux/Android accept up to 15.)
 void plat_thread_name(const char *name) {
     char nm[16];
     int i;
@@ -390,8 +390,8 @@ void plat_init(void) {
 }
 
 // (inside an AppImage: the binary in its mount, which stays mounted while this process lives - re-exec included)
-// (SMRPG Android: el «ejecutable» es app_process64 del sistema; lo que va con el programa —las fuentes...— está en la
-// carpeta que prepara runtime/platform/android.c, SMRPG_RES_DIR: el programa se hace pasar por un archivo de ella)
+// (SMRPG Android: the "executable" is the system's app_process64; what ships with the program (the fonts...) is in the
+// folder runtime/platform/android.c prepares, SMRPG_RES_DIR: the program passes itself off as a file in it)
 bool plat_exe_path(char *buf, size_t size) {
 #ifdef __ANDROID__
     const char *res = getenv("SMRPG_RES_DIR");
@@ -569,7 +569,7 @@ bool plat_onedrive_synced(const char *dir) { (void)dir; return false; }
 // while the game's threads still submitted work.
 void plat_terminate(void) { _exit(0); }
 
-// (SMRPG: solo Windows) runtime/platform.h
+// (SMRPG: Windows only) runtime/platform.h
 bool plat_spawn_self(void) { return false; }
 bool plat_proc_stats(PlatProcStats *s) { memset(s, 0, sizeof *s); return false; }
 bool plat_gpu_usage(double *pct) { *pct = 0; return false; }

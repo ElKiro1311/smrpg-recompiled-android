@@ -389,9 +389,9 @@ class Lifter:
         nbits = 8 << size
         addr = XS(rn)
         if o1:
-            # Par exclusivo (LDXP/LDAXP, STXP/STLXP; SMRPG: atómicos de 128 bits de Unity/IL2CPP). Los helpers de
-            # runtime/cpu.h emulan el monitor con un compare-and-swap del par entero. CAS/CASP son de ARMv8.1: la CPU
-            # de la Switch (Cortex-A57, ARMv8.0) no los tiene.
+            # Exclusive pair (LDXP/LDAXP, STXP/STLXP; SMRPG: the 128-bit atomics of Unity/IL2CPP). The helpers in
+            # runtime/cpu.h emulate the monitor with a compare-and-swap of the whole pair. CAS/CASP are ARMv8.1: the
+            # Switch's CPU (Cortex-A57, ARMv8.0) does not have them.
             if o2 or size < 2:
                 raise Unsupported('CAS / CASP' if o2 else 'exclusive pair size')
             rt2, pbits = bits(w, 10, 5), 8 << size

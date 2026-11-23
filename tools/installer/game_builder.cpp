@@ -1,21 +1,22 @@
-// construir.dll: construye el código del juego (extracted\lasgame.dll) DENTRO del proceso que la carga, el instalador
-// (tools/instalador/instalador.c), sin procesos hijos (antes: smrpg-recomp.exe --build-game, el generador congelado y
-// un zig por cada archivo, 30 procesos a la vez; ahora todo dentro de un solo proceso, sin procesos hijos):
-//   1. el generador de LAS Recomp (gen.py) en un Python embebido (python312.dll de la distribución «embeddable» de
-//      python.org, aislada por su python312._pth: no mira el Python ni las variables del PC), en un hilo: exefs\sdk y
-//      exefs\main a C, como `make gen`;
-//   2. clang como biblioteca (libclang-cpp y libLLVM de MSYS2: las mismas herramientas y la misma línea -cc1 que
-//      `make`) compila cada trozo de C en un grupo de hilos, a medida que el generador los escribe;
-//   3. lld como biblioteca (su controlador MinGW, la línea de enlace de `make`) enlaza lasgame.dll contra la biblioteca
-//      de importación de smrpg-recomp.exe, con game_overrides.o antes que el código generado: con varias definiciones
-//      de una función gana la primera (--allow-multiple-definition).
-// Todo lo que usa va con ella, en construir\: Python y los paquetes del generador, las cabeceras de clang y de
-// MinGW-w64 que incluye el código del juego, el CRT de MinGW-w64 y libgcc para enlazar. Del PC de quien instala, solo
-// Windows (10 u 11 de 64 bits).
-// La CPU: el código del juego se compila para x86-64-v3 (AVX2, FMA, BMI2..., como `make`) si la CPU lo tiene; si no,
-// para x86-64-v2 o x86-64 (más lento, pero funciona): lasgame.dll.cpu lo dice y smrpg-recomp.exe lo comprueba.
-// Reanudar: lo generado se reutiliza si el juego y el generador son los mismos (gen.key) y cada objeto si su C no
-// cambió (<trozo>.src) ni la forma de compilar (base.txt). Registro: <carpeta>\construccion.log.
+// builder.dll: builds the game code (extracted\lasgame.dll) INSIDE the process that loads it, the installer
+// (tools/installer/installer.c), with no child processes (before: smrpg-recomp.exe --build-game, the frozen generator
+// and one zig per file, 30 processes at the same time; now everything inside a single process, with no child
+// processes):
+//   1. LAS Recomp's generator (gen.py) in an embedded Python (python312.dll from python.org's "embeddable"
+//      distribution, isolated by its python312._pth: it looks at neither the PC's Python nor its variables), on one
+//      thread: exefs\sdk and exefs\main to C, like `make gen`;
+//   2. clang as a library (MSYS2's libclang-cpp and libLLVM: the same tools and the same -cc1 line as `make`) compiles
+//      each chunk of C in a thread pool, as the generator writes them;
+//   3. lld as a library (its MinGW driver, `make`'s link line) links lasgame.dll against smrpg-recomp.exe's import
+//      library, with game_overrides.o ahead of the generated code: with multiple definitions of a function the first
+//      one wins (--allow-multiple-definition).
+// Everything it uses ships with it, in builder\: Python and the generator's packages, the clang and MinGW-w64 headers
+// the game code includes, the MinGW-w64 CRT and libgcc for linking. From the installing user's PC, only Windows (64-bit
+// 10 or 11).
+// The CPU: the game code is compiled for x86-64-v3 (AVX2, FMA, BMI2..., like `make`) if the CPU has it; if not, for
+// x86-64-v2 or x86-64 (slower, but it works): lasgame.dll.cpu says so and smrpg-recomp.exe checks it.
+// Resuming: the generated code is reused if the game and the generator are the same (gen.key), and each object if
+// neither its C (<chunk>.src) nor the way of compiling (base.txt) changed. Log: <folder>\build.log.
 #include <windows.h>
 #include <bcrypt.h>
 #include <cpuid.h>
@@ -59,13 +60,18 @@ LLD_HAS_DRIVER(mingw)
 #ifndef GAMELIB_ID
 #define GAMELIB_ID "dev"
 #endif
-#define CONSTRUIR_VERSION "construir 1"
+#define BUILDER_VERSION "builder 1"
 
-typedef void (*AvanceFn)(void *ctx, double frac, const wchar_t *paso);
+// The texts for whoever is installing, in the installer's language: it gives its tr() (builder_set_tr); without it, English.
+typedef const wchar_t *(*TrFn)(const wchar_t *);
+static TrFn g_tr;
+extern "C" __declspec(dllexport) void builder_set_tr(TrFn f) { g_tr = f; }
+
+typedef void (*ProgressFn)(void *ctx, double frac, const wchar_t *step);
 
 namespace {
 
-// ------------------------------------------------------------------ texto, archivos, registro
+// ------------------------------------------------------------------ text, files, log
 std::string u8(const std::wstring &w) {
     if (w.empty()) return std::string();
     int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
@@ -80,7 +86,7 @@ std::wstring wide(const std::string &s) {
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
     return w;
 }
-std::wstring lp(const std::wstring &p) {  // \\?\ delante: rutas largas
+std::wstring lp(const std::wstring &p) {  // \\?\ in front: long paths
     return p.compare(0, 4, L"\\\\?\\") == 0 ? p : L"\\\\?\\" + p;
 }
 bool exists(const std::wstring &p) { return GetFileAttributesW(lp(p).c_str()) != INVALID_FILE_ATTRIBUTES; }
@@ -99,7 +105,7 @@ bool read_file(const std::wstring &p, std::string &out) {
     CloseHandle(h);
     return ok;
 }
-bool write_file(const std::wstring &p, const std::string &data) {  // (.tmp y se renombra: nunca a medias)
+bool write_file(const std::wstring &p, const std::string &data) {  // (.tmp, then renamed: never half-written)
     std::wstring t = p + L".tmp";
     HANDLE h = CreateFileW(lp(t).c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return false;
@@ -114,10 +120,10 @@ void mkdirs(const std::wstring &p) {
         if (l[i] == L'\\') { l[i] = 0; CreateDirectoryW(l.c_str(), NULL); l[i] = L'\\'; }
     CreateDirectoryW(l.c_str(), NULL);
 }
-void remove_tree(const std::wstring &dir) {  // (solo lo que esta DLL creó: la caché vieja, .gamebuild)
+void remove_tree(const std::wstring &dir) {  // (only what this DLL created: the old cache, .gamebuild)
     DWORD a = GetFileAttributesW(lp(dir).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) return;
-    if (a & FILE_ATTRIBUTE_REPARSE_POINT) {  // (un enlace: se quita el enlace, sin entrar en lo que apunta)
+    if (a & FILE_ATTRIBUTE_REPARSE_POINT) {  // (a link: the link is removed, without going into what it points to)
         RemoveDirectoryW(lp(dir).c_str());
         return;
     }
@@ -142,7 +148,8 @@ uint64_t file_bytes(const std::wstring &p) {
     return ((uint64_t)a.nFileSizeHigh << 32) | a.nFileSizeLow;
 }
 
-// "" si BCrypt falla: quien compara toma "" como distinto de todo (si no, cualquier archivo «coincidiría» con cualquiera)
+// "" if BCrypt fails: whoever compares takes "" as different from everything (otherwise any file would "match" any
+// other)
 std::string sha256_hex(const std::string &data) {
     static BCRYPT_ALG_HANDLE alg;
     static std::once_flag once;
@@ -160,7 +167,7 @@ std::string file_sha(const std::wstring &p) {
     return read_file(p, d) ? sha256_hex(d) : std::string();
 }
 
-// el contenido de una carpeta entera (sus rutas relativas y lo que tiene cada archivo, en orden)
+// the contents of a whole folder (its relative paths and what each file holds, in order)
 void list_files(const std::wstring &dir, const std::wstring &rel, std::vector<std::wstring> &out) {
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(lp(dir + L"\\*").c_str(), &fd);
@@ -182,6 +189,10 @@ std::string dir_sha(const std::wstring &dir) {
     return sha256_hex(all);
 }
 
+std::wstring wide(const std::string &s);
+const wchar_t *trw(const wchar_t *en) { return g_tr ? g_tr(en) : en; }
+std::string TR(const char *en) { return g_tr ? u8(g_tr(wide(en).c_str())) : std::string(en); }
+
 struct Log {
     HANDLE h = INVALID_HANDLE_VALUE;
     std::mutex m;
@@ -196,7 +207,7 @@ struct Log {
         char b[4096];
         SYSTEMTIME t;
         GetLocalTime(&t);
-        int n = snprintf(b, sizeof b, "%02d:%02d:%02d [construir] ", t.wHour, t.wMinute, t.wSecond);
+        int n = snprintf(b, sizeof b, "%02d:%02d:%02d [builder] ", t.wHour, t.wMinute, t.wSecond);
         va_list ap;
         va_start(ap, fmt);
         n += vsnprintf(b + n, sizeof b - n - 2, fmt, ap);
@@ -212,7 +223,7 @@ struct Log {
 // ------------------------------------------------------------------ la CPU (CPUID)
 std::string cpu_level() {
     char env[32];
-    DWORD en = GetEnvironmentVariableA("SMRPG_CONSTRUIR_CPU", env, sizeof env);  // (pruebas: solo los tres niveles)
+    DWORD en = GetEnvironmentVariableA("SMRPG_BUILD_CPU", env, sizeof env);  // (tests: only the three levels)
     if (en && en < sizeof env && (!strcmp(env, "x86-64") || !strcmp(env, "x86-64-v2") || !strcmp(env, "x86-64-v3")))
         return env;
     unsigned a, b, c, d, c1, d1, b7 = 0, c81 = 0;
@@ -228,31 +239,31 @@ std::string cpu_level() {
     if (osxsave) {
         unsigned lo, hi;
         __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
-        ymm = (lo & 6) == 6;  // (el sistema guarda los registros XMM e YMM)
+        ymm = (lo & 6) == 6;  // (the system saves the XMM and YMM registers)
     }
     if (v2 && avx && ymm && avx2 && fma && bmi1 && bmi2 && f16c && movbe && lzcnt) return "x86-64-v3";
     return v2 ? "x86-64-v2" : "x86-64";
 }
 
-// ------------------------------------------------------------------ hilos con pila grande, y su red
-// clang y LLVM recursan muy hondo en las funciones enormes del código generado: con los 2 MB de un hilo normal de este
-// proceso, MemorySSAUpdater::recursePhi desbordó la pila (visto con gdb, 0xC00000FD, el proceso caía sin aviso). El
-// clang.exe de MSYS2 (el de `make`) corre con 16 MB y el clang de zig (0.47) con 46: estos hilos reservan 64 MB (solo
-// espacio de direcciones; la memoria se compromete a medida que se usa). Van con prioridad por debajo de lo normal, para
-// que el PC siga respondiendo mientras compilan.
-constexpr SIZE_T kPila = 64u << 20;
+// ------------------------------------------------------------------ large-stack threads, and their safety net
+// clang and LLVM recurse very deep in the generated code's huge functions: with the 2 MB of a normal thread of this
+// process, MemorySSAUpdater::recursePhi overflowed the stack (seen with gdb, 0xC00000FD, the process went down without
+// warning). MSYS2's clang.exe (`make`'s) runs with 16 MB and zig's clang (0.47) with 46: these threads reserve 64 MB
+// (address space only; the memory is committed as it is used). They run at below-normal priority, so that the PC stays
+// responsive while they compile.
+constexpr SIZE_T kStack = 64u << 20;
 
-DWORD WINAPI hilo_grande_main(void *p) {
+DWORD WINAPI big_thread_main(void *p) {
     std::unique_ptr<std::function<void()>> f(static_cast<std::function<void()> *>(p));
-    ULONG g = 256u << 10;  // (si aun así se acabase la pila, queda sitio para recogerlo: guard_veh)
+    ULONG g = 256u << 10;  // (should the stack run out even so, there is room left to catch it: guard_veh)
     SetThreadStackGuarantee(&g);
     (*f)();
     return 0;
 }
 
-HANDLE hilo_grande(std::function<void()> fn) {
+HANDLE big_thread(std::function<void()> fn) {
     auto *p = new std::function<void()>(std::move(fn));
-    HANDLE h = CreateThread(NULL, kPila, hilo_grande_main, p, STACK_SIZE_PARAM_IS_A_RESERVATION | CREATE_SUSPENDED, NULL);
+    HANDLE h = CreateThread(NULL, kStack, big_thread_main, p, STACK_SIZE_PARAM_IS_A_RESERVATION | CREATE_SUSPENDED, NULL);
     if (!h) {
         delete p;
         return NULL;
@@ -262,10 +273,10 @@ HANDLE hilo_grande(std::function<void()> fn) {
     return h;
 }
 
-// La red: un fallo dentro de clang/LLVM en un hilo de compilación (una excepción de Windows, o un error grave de LLVM,
-// que si no llamaría a exit y cerraría el instalador) vuelve a compile_unit como error de ese archivo. Solo en esos
-// hilos (TLS): en el del generador, unicorn provoca y recoge sus propios fallos de acceso (visto con gdb), y el
-// CrashRecoveryContext de LLVM, con su manejador para todo el proceso, se desactivaba entero con el primero de ellos.
+// The safety net: a crash inside clang/LLVM on a compiler thread (a Windows exception, or a fatal LLVM error, which
+// would otherwise call exit and close the installer) comes back to compile_unit as that file's error. Only on those
+// threads (TLS): on the generator's, unicorn raises and catches its own access faults (seen with gdb), and LLVM's
+// CrashRecoveryContext, with its process-wide handler, was disabled entirely by the first of them.
 struct Guard {
     jmp_buf jb;
     DWORD code;
@@ -273,14 +284,14 @@ struct Guard {
 };
 DWORD g_guard_tls = TLS_OUT_OF_INDEXES;
 PVOID g_guard_veh;
-// Tras recoger un fallo, el proceso queda tocado: lo que clang tenía a medias no se liberó, y si el fallo llegó con un
-// cerrojo tomado (del montón, de LLVM) sigue tomado. Las llamadas siguientes no construyen: piden reabrir el
-// instalador (lo compilado se guarda, así que sale barato)
+// After catching a crash, the process is left tainted: what clang had half done was not freed, and if the crash came
+// with a lock held (the heap's, LLVM's) it is still held. Later calls do not build: they ask to reopen the installer
+// (what was compiled is kept, so it comes cheap)
 std::atomic<bool> g_tainted{false};
 
 Guard *guard_here() {
     if (g_guard_tls == TLS_OUT_OF_INDEXES) return nullptr;
-    DWORD le = GetLastError();  // (TlsGetValue lo pone a 0: no tocárselo al código del hilo que trata su excepción)
+    DWORD le = GetLastError();  // (TlsGetValue sets it to 0: keep it for the thread's code handling its exception)
     Guard *g = static_cast<Guard *>(TlsGetValue(g_guard_tls));
     SetLastError(le);
     return g;
@@ -307,15 +318,15 @@ LONG CALLBACK guard_veh(EXCEPTION_POINTERS *e) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-void guard_fatal(void *, const char *reason, bool) {  // (report_fatal_error, y sin memoria: report_bad_alloc_error)
+void guard_fatal(void *, const char *reason, bool) {  // (report_fatal_error, and out of memory: report_bad_alloc_error)
     if (Guard *g = guard_here()) {
         snprintf(g->why, sizeof g->why, "%s", reason ? reason : "");
         g->code = 0;
         TlsSetValue(g_guard_tls, NULL);
         longjmp(g->jb, 1);
     }
-    g_log("error grave de LLVM fuera de una compilación: %s", reason ? reason : "");
-    llvm::sys::Process::Exit(1);  // (en el enlace, con el CrashRecoveryContext de lldMain, vuelve a lldMain)
+    g_log("fatal LLVM error outside a compilation: %s", reason ? reason : "");
+    llvm::sys::Process::Exit(1);  // (during the link, with lldMain's CrashRecoveryContext, it returns to lldMain)
 }
 
 void guard_install() {
@@ -325,17 +336,18 @@ void guard_install() {
         g_guard_veh = AddVectoredExceptionHandler(1, guard_veh);
         llvm::install_fatal_error_handler(guard_fatal, nullptr);
         llvm::install_bad_alloc_error_handler(guard_fatal, nullptr);
-        // sin memoria en un `new` (std::vector, la IR...): sin excepciones, terminaría con abort sin decir nada
-        std::set_new_handler([] { guard_fatal(nullptr, "sin memoria", false); });
+        // out of memory in a `new` (std::vector, the IR...): without exceptions, it would end with abort without saying
+        // anything
+        std::set_new_handler([] { guard_fatal(nullptr, "out of memory", false); });
         std::set_terminate([] {
-            g_log("terminado por un error interno (std::terminate)");
+            g_log("ended by an internal error (std::terminate)");
             abort();
         });
     });
 }
 
-// fn(ctx) con la red puesta: false si falló (why dice cómo). Tras un fallo, el hilo no debe seguir compilando: lo que
-// clang tenía a medias queda sin liberar.
+// fn(ctx) with the safety net in place: false if it crashed (why says how). After a crash, the thread must not keep
+// compiling: what clang had half done stays unfreed.
 __attribute__((noinline)) bool run_guarded(void (*fn)(void *), void *ctx, std::string &why) {
     Guard g;
     g.code = 0, g.why[0] = 0;
@@ -343,12 +355,12 @@ __attribute__((noinline)) bool run_guarded(void (*fn)(void *), void *ctx, std::s
         if (g.code == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
         char b[400];
         if (g.code)
-            snprintf(b, sizeof b, "excepción 0x%08lX%s", g.code,
-                     g.code == EXCEPTION_STACK_OVERFLOW     ? " (se acabó la pila)"
-                     : g.code == EXCEPTION_ACCESS_VIOLATION ? " (acceso a memoria no válido)"
+            snprintf(b, sizeof b, "exception 0x%08lX%s", g.code,
+                     g.code == EXCEPTION_STACK_OVERFLOW     ? " (stack overflow)"
+                     : g.code == EXCEPTION_ACCESS_VIOLATION ? " (invalid memory access)"
                                                             : "");
-        else if (!strcmp(g.why, "sin memoria"))
-            snprintf(b, sizeof b, "sin memoria");
+        else if (!strcmp(g.why, "out of memory"))
+            snprintf(b, sizeof b, "out of memory");
         else
             snprintf(b, sizeof b, "error grave de LLVM: %s", g.why);
         why = b;
@@ -360,7 +372,7 @@ __attribute__((noinline)) bool run_guarded(void (*fn)(void *), void *ctx, std::s
     return true;
 }
 
-// ------------------------------------------------------------------ las rutas
+// ------------------------------------------------------------------ the paths
 struct Paths {
     std::wstring dest, game, work, tools, py, res_inc, mingw_inc, mingw_lib, src, implib;
 };
@@ -376,7 +388,7 @@ std::wstring module_dir() {
     return k == std::wstring::npos ? s : s.substr(0, k);
 }
 
-// ------------------------------------------------------------------ el generador (Python embebido)
+// ------------------------------------------------------------------ the generator (embedded Python)
 struct Py {
     HMODULE dll = NULL;
     int (*IsInitialized)(void) = nullptr;
@@ -393,7 +405,7 @@ bool py_load(const std::wstring &dir, std::string &err) {
     std::lock_guard<std::mutex> g(g_py_lock);
     if (g_py.dll) return true;
     HMODULE h = LoadLibraryExW((dir + L"\\python312.dll").c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!h) { err = "no se pudo cargar python312.dll (error " + std::to_string(GetLastError()) + ")"; return false; }
+    if (!h) { err = TR("python312.dll could not be loaded (error ") + std::to_string(GetLastError()) + ")"; return false; }
 #define PYF(f, n) g_py.f = (decltype(g_py.f))(void *)GetProcAddress(h, n)
     PYF(IsInitialized, "Py_IsInitialized");
     PYF(InitializeEx, "Py_InitializeEx");
@@ -403,22 +415,22 @@ bool py_load(const std::wstring &dir, std::string &err) {
     PYF(RunSimpleString, "PyRun_SimpleString");
 #undef PYF
     if (!g_py.IsInitialized || !g_py.InitializeEx || !g_py.SaveThread || !g_py.GILEnsure || !g_py.GILRelease || !g_py.RunSimpleString) {
-        err = "python312.dll no tiene la API esperada";
+        err = TR("python312.dll lacks the expected API");
         return false;
     }
     g_py.dll = h;
     if (!g_py.IsInitialized()) {
-        // (aislado también de las variables del PC —PYTHONUTF8, PYTHONMALLOC...—: python312._pth fija las rutas, pero
-        // esas se leen antes; las marcas globales de 3.12 lo apagan todo, como python -I -E -s)
+        // (isolated from the PC's variables too (PYTHONUTF8, PYTHONMALLOC...): python312._pth sets the paths, but those
+        // are read earlier; 3.12's global flags turn it all off, like python -I -E -s)
         for (const char *flag : {"Py_IgnoreEnvironmentFlag", "Py_IsolatedFlag", "Py_NoUserSiteDirectory"})
             if (int *f = (int *)(void *)GetProcAddress(h, flag)) *f = 1;
-        g_py.InitializeEx(0);  // (sin manejadores de señales: es una biblioteca dentro del instalador)
-        g_py.SaveThread();     // (suelta el GIL: cada ejecución lo toma con PyGILState_Ensure, desde cualquier hilo)
+        g_py.InitializeEx(0);  // (no signal handlers: it is a library inside the installer)
+        g_py.SaveThread();     // (releases the GIL: each run takes it with PyGILState_Ensure, from any thread)
     }
     return true;
 }
 
-// la ruta como expresión de Python: sus bytes UTF-8 en hexadecimal (cualquier carácter, también comillas o barras al final)
+// the path as a Python expression: its UTF-8 bytes in hex (any character, quotes or trailing backslashes included)
 std::string pystr(const std::wstring &p) {
     std::string s = u8(p), out = "bytes.fromhex('";
     char h[3];
@@ -426,7 +438,7 @@ std::string pystr(const std::wstring &p) {
     return out + "').decode('utf-8')";
 }
 
-// gen.py <name> <nso> <base> <outdir> [--hle <hle>]: su progreso (stderr) a <log>, su código de salida a <rc>
+// gen.py <name> <nso> <base> <outdir> [--hle <hle>]: its progress (stderr) to <log>, its exit code to <rc>
 int py_gen(const Paths &P, const char *name, const char *base, const std::wstring &log, std::string &err) {
     std::wstring wn = wide(name), nso = P.game + L"\\exefs\\" + wn, out = P.work + L"\\" + wn;
     std::wstring rc = P.work + L"\\gen_" + wn + L".rc";
@@ -460,7 +472,7 @@ int py_gen(const Paths &P, const char *name, const char *base, const std::wstrin
     int r = g_py.RunSimpleString(code.c_str());
     g_py.GILRelease(st);
     std::string rcs;
-    if (r != 0 || !read_file(rc, rcs)) { err = std::string("el generador (") + name + ") no terminó"; return 1; }
+    if (r != 0 || !read_file(rc, rcs)) { err = TR("the generator (") + name + TR(") did not finish"); return 1; }
     int v = atoi(rcs.c_str());
     if (v != 0) {
         std::string l;
@@ -468,12 +480,12 @@ int py_gen(const Paths &P, const char *name, const char *base, const std::wstrin
         size_t k = l.find_last_not_of("\r\n");
         l = k == std::string::npos ? "" : l.substr(0, k + 1);
         size_t s = l.find_last_of('\n');
-        err = std::string("el generador (") + name + ") falló: " + (s == std::string::npos ? l : l.substr(s + 1));
+        err = TR("the generator (") + name + TR(") failed: ") + (s == std::string::npos ? l : l.substr(s + 1));
     }
     return v;
 }
 
-// lo que el generador lleva escrito: ": progress <hechas>/<todas> files <trozos>" (su registro)
+// what the generator has written so far: ": progress <done>/<all> files <chunks>" (its log)
 void gen_progress(const std::wstring &log, uint64_t &ci, uint64_t &all, int &files) {
     std::string t;
     if (!read_file(log, t)) return;
@@ -487,17 +499,17 @@ void gen_progress(const std::wstring &log, uint64_t &ci, uint64_t &all, int &fil
     }
 }
 
-// ------------------------------------------------------------------ compilar (clang como biblioteca)
+// ------------------------------------------------------------------ compiling (clang as a library)
 struct Unit {
     std::wstring src, obj;
-    std::string stem, define;  // define: "-D" extra (gamelib_entry: el id de la biblioteca)
+    std::string stem, define;  // define: an extra "-D" (gamelib_entry: the library's id)
     uint64_t bytes = 0;
 };
 
 std::vector<std::string> cc1_args(const Paths &P, const std::string &cpu) {
-    // la línea -cc1 de `make` (clang -### con GENFLAGS: -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label
-    // -fvisibility=hidden -D_FILE_OFFSET_BITS=64 -march=x86-64-v3), sin -disable-free (aquí la memoria se devuelve: un
-    // proceso compila mil archivos) ni rutas de depuración; las cabeceras, las que van en la carpeta construir
+    // `make`'s -cc1 line (clang -### with GENFLAGS: -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label
+    // -fvisibility=hidden -D_FILE_OFFSET_BITS=64 -march=x86-64-v3), without -disable-free (here the memory is given
+    // back: one process compiles a thousand files) or debug paths; the headers, the ones in the builder folder
     return {"-triple", "x86_64-w64-windows-gnu", "-O1", "-emit-obj", "-clear-ast-before-backend", "-disable-llvm-verifier",
             "-discard-value-names", "-mrelocation-model", "pic", "-pic-level", "2", "-mframe-pointer=none",
             "-relaxed-aliasing", "-fmath-errno", "-ffp-contract=on", "-fno-rounding-math", "-mconstructor-aliases",
@@ -508,18 +520,18 @@ std::vector<std::string> cc1_args(const Paths &P, const std::string &cpu) {
             "-fgnuc-version=4.2.1", "-fskip-odr-check-in-gmf", "-exception-model=seh", "-faddrsig"};
 }
 
-// (pruebas de la red: SMRPG_CONSTRUIR_PRUEBA_FALLO=<trozo>:1 escribe en la dirección 0 y <trozo>:2 agota la pila al
-// compilar ese trozo, como si fallara clang)
+// (tests of the safety net: SMRPG_BUILD_TEST_FAIL=<chunk>:1 writes to address 0 and <chunk>:2 exhausts the stack when
+// compiling that chunk, as if clang failed)
 int crash_test_mode(const std::string &stem) {
     char e[96];
-    DWORD n = GetEnvironmentVariableA("SMRPG_CONSTRUIR_PRUEBA_FALLO", e, sizeof e);
+    DWORD n = GetEnvironmentVariableA("SMRPG_BUILD_TEST_FAIL", e, sizeof e);
     if (!n || n >= sizeof e) return 0;
     std::string s = e;
     size_t k = s.find(':');
     return k != std::string::npos && s.substr(0, k) == stem ? atoi(s.c_str() + k + 1) : 0;
 }
 #pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winfinite-recursion"  // (a propósito: agota la pila)
+#pragma clang diagnostic ignored "-Winfinite-recursion"  // (on purpose: exhausts the stack)
 __attribute__((noinline, optnone)) int burn_stack(int n) {
     volatile char buf[4096];
     buf[0] = (char)n;
@@ -527,7 +539,7 @@ __attribute__((noinline, optnone)) int burn_stack(int n) {
 }
 #pragma clang diagnostic pop
 
-// un objeto que se puede reutilizar: COFF de x86-64 (un apagón puede dejar el archivo renombrado pero lleno de ceros)
+// an object that can be reused: x86-64 COFF (a power cut can leave the file renamed but full of zeros)
 bool obj_ok(const std::wstring &p) {
     HANDLE h = CreateFileW(lp(p).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return false;
@@ -568,7 +580,7 @@ bool compile_unit(const std::vector<std::string> &base, const Unit &u, std::stri
             auto inv = std::make_shared<clang::CompilerInvocation>();
             if (!clang::CompilerInvocation::CreateFromArgs(*inv, *j.argv, diags)) return;
             clang::CompilerInstance ci(inv);
-            // (un sistema de archivos propio por compilación: su directorio de trabajo no se comparte entre hilos)
+            // (a file system of its own per compilation: its working directory is not shared between threads)
             ci.createVirtualFileSystem(
                 llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem>(llvm::vfs::createPhysicalFileSystem().release()), &printer);
             ci.createDiagnostics(&printer, false);
@@ -579,28 +591,28 @@ bool compile_unit(const std::vector<std::string> &base, const Unit &u, std::stri
     os.flush();
     bool ok = ran && job.ok;
     if (!ran) {
-        diag = "clang se detuvo: " + crash + (diag.empty() ? std::string() : "\n" + diag);
-        g_tainted = true;  // (lo que clang tenía a medias queda así: ver g_tainted)
+        diag = "clang stopped: " + crash + (diag.empty() ? std::string() : "\n" + diag);
+        g_tainted = true;  // (what clang had half done stays that way: see g_tainted)
     }
-    if (ok) {  // (un antivirus puede tener abierto el objeto anterior un momento)
+    if (ok) {  // (an antivirus may hold the previous object open for a moment)
         for (int i = 0; i < 20; i++) {
             if (MoveFileExW(lp(tmp).c_str(), lp(u.obj).c_str(), MOVEFILE_REPLACE_EXISTING)) return true;
             Sleep(100);
         }
-        diag = "no se pudo escribir " + u8(u.obj) + " (error " + std::to_string(GetLastError()) + ")";
+        diag = "could not write " + u8(u.obj) + " (error " + std::to_string(GetLastError()) + ")";
         ok = false;
     }
     DeleteFileW(lp(tmp).c_str());
     return ok;
 }
 
-// ------------------------------------------------------------------ enlazar (lld como biblioteca)
-bool g_lld_spent;  // (lld salió por su vía de error grave: no se puede volver a usar en este proceso)
+// ------------------------------------------------------------------ linking (lld as a library)
+bool g_lld_spent;  // (lld left through its fatal-error path: it cannot be used again in this process)
 
 bool link_lib(const Paths &P, const std::vector<std::wstring> &objs, const std::wstring &out, std::string &diag) {
     std::string L = u8(P.mingw_lib);
-    // (--threads=1: con más, lld deja un grupo de hilos de LLVM vivo en el proceso, y al salir su destructor estático
-    // espera a hilos que Windows ya ha matado: el proceso se quedaba colgado al cerrarse. Medido: enlazar así, 0,6 s)
+    // (--threads=1: with more, lld leaves an LLVM thread pool alive in the process, and on exit its static destructor
+    // waits for threads Windows has already killed: the process hung on closing. Measured: linking like this, 0.6 s)
     std::vector<std::string> a = {"ld.lld", "-m", "i386pep", "--shared", "-Bdynamic", "-e", "DllMainCRTStartup",
                                   "--enable-auto-image-base", "--threads=1", "-o", u8(out), L + "\\dllcrt2.o",
                                   L + "\\crtbegin.o", "-L" + L, u8(P.implib), "--allow-multiple-definition"};
@@ -613,8 +625,8 @@ bool link_lib(const Paths &P, const std::vector<std::wstring> &objs, const std::
     std::vector<const char *> argv;
     for (auto &s : a) argv.push_back(s.c_str());
     llvm::raw_string_ostream os(diag);
-    // (lld, ante un error grave o al pasar de 20 errores, llama a exit: con el CrashRecoveryContext encendido, lldMain lo
-    // recoge y vuelve aquí. Solo durante el enlace: el generador ya acabó, y ningún hilo de compilación sigue vivo)
+    // (lld, on a fatal error or past 20 errors, calls exit: with the CrashRecoveryContext on, lldMain catches it and
+    // returns here. Only during the link: the generator is already done, and no compiler thread is still alive)
     llvm::CrashRecoveryContext::Enable();
     lld::Result r = lld::lldMain(argv, os, os, {{lld::MinGW, &lld::mingw::link}});
     llvm::CrashRecoveryContext::Disable();
@@ -623,18 +635,18 @@ bool link_lib(const Paths &P, const std::vector<std::wstring> &objs, const std::
     return r.retCode == 0;
 }
 
-// ------------------------------------------------------------------ la construcción
-// El generador y los hilos de compilación trabajan con su propio estado, en el montón, no con el de la llamada: al
-// cancelar o fallar, la llamada vuelve enseguida y ellos acaban por su cuenta lo que tengan entre manos (un hilo no se
-// puede cortar a medias sin dejar el proceso tocado, y un trozo grande tarda minutos); la siguiente construcción los
-// espera (g_last_gen, g_last_build). Si se cierra el instalador, el proceso entero termina con ellos.
+// ------------------------------------------------------------------ the build
+// The generator and the compiler threads work on their own state, on the heap, not on the call's: on canceling or
+// failing, the call returns right away and they finish on their own whatever they have in hand (a thread cannot be cut
+// off halfway without leaving the process tainted, and a large chunk takes minutes); the next build waits for them
+// (g_last_gen, g_last_build). If the installer is closed, the whole process ends along with them.
 struct GenShared {
     Paths P;
-    std::wstring log[2];                       // su registro (si el de la vez anterior no se pudo borrar, otro nombre)
-    std::string key;                           // gen.key, que escribe al acabar bien los dos
-    std::atomic<bool> started[2] = {{false}, {false}};  // (su registro solo se lee una vez empezado: no el viejo)
-    std::atomic<int> files_final[2] = {{0}, {0}};       // los trozos de cada uno, leídos al acabar (antes de state = 1)
-    std::atomic<int> state[2] = {{0}, {0}};  // main, sdk: 0 en marcha, 1 bien, 2 mal
+    std::wstring log[2];                       // each one's log (another name if the last run's could not be deleted)
+    std::string key;                           // gen.key, which it writes once both finish successfully
+    std::atomic<bool> started[2] = {{false}, {false}};  // (its log is only read once it has started: not the old one)
+    std::atomic<int> files_final[2] = {{0}, {0}};       // each one's chunks, read when it finishes (before state = 1)
+    std::atomic<int> state[2] = {{0}, {0}};  // main, sdk: 0 running, 1 fine, 2 failed
     std::atomic<bool> running{false};
     std::mutex m;
     std::string err;
@@ -653,7 +665,7 @@ struct Build {
     std::atomic<uint64_t> bytes_done{0};
     std::atomic<bool> failed{false}, stop{false};
     std::string fail_msg;       // (con qm)
-    std::atomic<int> alive{0};  // hilos de compilación en marcha
+    std::atomic<int> alive{0};  // compiler threads running
 };
 std::shared_ptr<Build> g_last_build;
 
@@ -679,7 +691,7 @@ void compile_worker(const std::shared_ptr<Build> &bs) {
             u = b.units[b.queue.front()];
             b.queue.pop_front();
         }
-        // ¿sirve el objeto de antes? (el mismo C, y la misma forma de compilar: base.txt)
+        // is the earlier object still good? (the same C, and the same way of compiling: base.txt)
         std::string src;
         std::string sha = read_file(u.src, src) ? sha256_hex(src + "\n" + u.define) : std::string();
         std::wstring srcf = b.P.work + L"\\" + wide(u.stem) + L".src";
@@ -688,18 +700,18 @@ void compile_worker(const std::shared_ptr<Build> &bs) {
             b.nreused++, b.ndone++, b.bytes_done += u.bytes;
             continue;
         }
-        DeleteFileW(lp(srcf).c_str());  // (su .src solo existe mientras su .o es el de ese C)
+        DeleteFileW(lp(srcf).c_str());  // (its .src only exists while its .o is the one from that C)
         std::string diag;
         bool ok = !sha.empty() && compile_unit(b.base, u, diag);
         if (!ok) {
-            if (sha.empty()) diag = "no se pudo leer " + u8(u.src);
-            if (diag.empty()) diag = "clang no dijo por qué";
+            if (sha.empty()) diag = "could not read " + u8(u.src);
+            if (diag.empty()) diag = "clang did not say why";
             write_file(b.P.work + L"\\" + wide(u.stem) + L".log", diag);
             std::lock_guard<std::mutex> g(b.qm);
             if (!b.failed) {
                 b.failed = true;
                 size_t k = diag.find('\n');
-                b.fail_msg = "el código del juego no compila (" + u.stem + "): " + (k == std::string::npos ? diag : diag.substr(0, k));
+                b.fail_msg = TR("the game code does not compile (") + u.stem + "): " + (k == std::string::npos ? diag : diag.substr(0, k));
             }
             b.stop = true;
             b.qcv.notify_all();
@@ -720,14 +732,14 @@ int fail(wchar_t *why, int cap, const std::string &msg) {
 
 }  // namespace
 
-extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jobs, AvanceFn avance, void *ctx,
-                                                     volatile long *cancelar, wchar_t *why, int why_cap) {
+extern "C" __declspec(dllexport) int build_game_code(const wchar_t *dest, int jobs, ProgressFn progress, void *ctx,
+                                                     volatile long *cancel, wchar_t *why, int why_cap) {
     if (why && why_cap > 0) why[0] = 0;
     DWORD t0 = GetTickCount();
     Paths P;
     P.dest = dest;
     P.game = P.dest + L"\\extracted";
-    P.work = P.game + L"\\.construir";
+    P.work = P.game + L"\\.builder";
     P.tools = module_dir();
     P.py = P.tools + L"\\python";
     P.res_inc = P.tools + L"\\clang\\include";
@@ -735,55 +747,56 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
     P.mingw_lib = P.tools + L"\\mingw\\lib";
     P.src = P.dest + L"\\gamelib-src";
     P.implib = P.dest + L"\\smrpg-recomp.dll.a";
-    g_log.open(P.dest + L"\\construccion.log");
+    g_log.open(P.dest + L"\\build.log");
     struct Close { ~Close() { g_log.close(); } } close_log;
-    auto step = [&](double f, const wchar_t *s) { if (avance) avance(ctx, f, s); };
-    auto cancelled = [&] { return cancelar && *cancelar; };
+    auto step = [&](double f, const wchar_t *s) { if (progress) progress(ctx, f, s); };
+    auto cancelled = [&] { return cancel && *cancel; };
 
-    // lo que hace falta: el juego extraído y lo que va en construir\ y gamelib-src
+    // what is needed: the extracted game and what ships in builder\ and gamelib-src
     std::string nso;
     if (!read_file(P.game + L"\\exefs\\main", nso) || nso.size() < 0x60 || memcmp(nso.data(), "NSO0", 4))
-        return fail(why, why_cap, "no está el programa del juego (extracted\\exefs\\main)");
+        return fail(why, why_cap, TR("the game's program is missing (extracted\\exefs\\main)"));
     char bid[17];
     for (int i = 0; i < 8; i++) snprintf(bid + 2 * i, 3, "%02x", (unsigned char)nso[0x40 + i]);
     std::string full_id = std::string(GAMELIB_ID) + "-" + bid;
-    // (sin python312.zip o con él dañado, Python no arranca y llama a abort: se mira antes)
+    // (with python312.zip missing or damaged, Python does not start and calls abort: checked beforehand)
     for (const std::wstring &f : {P.py + L"\\python312.dll", P.py + L"\\python312.zip", P.py + L"\\python312._pth",
                                   P.py + L"\\vcruntime140.dll", P.py + L"\\gen\\tools\\gen.py", P.res_inc + L"\\stdint.h",
                                   P.mingw_inc + L"\\stdio.h", P.mingw_lib + L"\\dllcrt2.o", P.src + L"\\cpu.h",
                                   P.src + L"\\gamelib_entry.c", P.src + L"\\game_overrides.c", P.implib})
-        if (!exists(f) || !file_bytes(f)) return fail(why, why_cap, "falta " + u8(f) + ": vuelve a ejecutar el instalador");
+        if (!exists(f) || !file_bytes(f)) return fail(why, why_cap, TR("missing: ") + u8(f) + TR(": run the installer again"));
     if (g_tainted)
-        return fail(why, why_cap, "una construcción anterior falló dentro de clang y dejó este proceso tocado: cierra el "
-                                  "instalador y vuelve a abrirlo (lo ya compilado se guarda)");
+        return fail(why, why_cap, TR("an earlier build failed inside clang and left this process in a bad state: close "
+                                  "the installer and open it again (what was already compiled is kept)"));
     if (g_lld_spent)
-        return fail(why, why_cap, "el enlazador falló antes y no se puede volver a usar: cierra el instalador y vuelve a abrirlo");
+        return fail(why, why_cap, TR("the linker failed earlier and cannot be used again: close the installer and open "
+                                  "it again"));
     std::string cpu = cpu_level();
-    // (lo que siga en marcha de una construcción cancelada o fallida: acaba solo, y aquí se espera; un trozo grande
-    // tarda ~3 min: si en 20 no ha acabado, algo se quedó trabado)
+    // (whatever is still running from a canceled or failed build: it finishes on its own, and it is waited for here; a
+    // large chunk takes ~3 min: if it is not done in 20, something got stuck)
     for (DWORD tw = GetTickCount(); (g_last_gen && g_last_gen->running) || (g_last_build && g_last_build->alive > 0);) {
-        if (cancelled()) return fail(why, why_cap, "cancelado");
+        if (cancelled()) return fail(why, why_cap, TR("canceled"));
         if (g_tainted || GetTickCount() - tw > 20 * 60 * 1000)
-            return fail(why, why_cap, "lo que quedó en marcha de la vez anterior no termina: cierra el instalador y vuelve a "
-                                      "abrirlo (lo ya compilado se guarda)");
-        step(0, L"esperando a que acabe lo que quedó en marcha de la vez anterior");
+            return fail(why, why_cap, TR("what was left running from the previous attempt does not finish: close the "
+                                      "installer and open it again (what was already compiled is kept)"));
+        step(0, trw(L"waiting for what was left running from the previous attempt"));
         Sleep(200);
     }
     guard_install();
     mkdirs(P.work);
     MEMORYSTATUSEX ms = {sizeof ms};
     GlobalMemoryStatusEx(&ms);
-    g_log("%s: %s, CPU %s, %d hilos de compilación, %.1f GB de RAM, id %s", CONSTRUIR_VERSION, u8(P.game).c_str(),
+    g_log("%s: %s, CPU %s, %d compiler threads, %.1f GB of RAM, id %s", BUILDER_VERSION, u8(P.game).c_str(),
           cpu.c_str(), jobs, ms.ullTotalPhys / 1073741824.0, full_id.c_str());
 
-    // la forma de compilar (base.txt): si cambia, ningún objeto anterior vale. Sin rutas (mover la carpeta no cambia lo
-    // que sale) y con el contenido de las cabeceras de clang y de MinGW-w64; las del port (cpu.h, simd.h...) y el
-    // generador van en GAMELIB_ID
+    // the way of compiling (base.txt): if it changes, no earlier object is valid. Without paths (moving the folder does
+    // not change the output) and with the contents of the clang and MinGW-w64 headers; the port's (cpu.h, simd.h...)
+    // and the generator are in GAMELIB_ID
     std::vector<std::string> base = cc1_args(P, cpu);
     Paths Pn = P;
-    Pn.tools = L"<construir>", Pn.res_inc = L"<construir>\\clang\\include", Pn.mingw_inc = L"<construir>\\mingw\\include";
+    Pn.tools = L"<builder>", Pn.res_inc = L"<builder>\\clang\\include", Pn.mingw_inc = L"<builder>\\mingw\\include";
     Pn.src = L"<gamelib-src>";
-    std::string sig = std::string(CONSTRUIR_VERSION) + "\n" + GAMELIB_ID + "\n" + cpu + "\n";
+    std::string sig = std::string(BUILDER_VERSION) + "\n" + GAMELIB_ID + "\n" + cpu + "\n";
     for (auto &s : cc1_args(Pn, cpu)) sig += s + " ";
     sig += "\n" + std::to_string(file_bytes(P.tools + L"\\libclang-cpp.dll")) + " " +
            std::to_string(file_bytes(P.tools + L"\\libLLVM-23.dll")) + " " + dir_sha(P.res_inc) + " " + dir_sha(P.mingw_inc) + "\n";
@@ -803,15 +816,15 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
         write_file(P.work + L"\\base.txt", sig);
     }
 
-    // el generador: se reutiliza lo generado si el juego y el generador son los mismos (gen.key)
-    std::string key = std::string(CONSTRUIR_VERSION) + GAMELIB_ID + sha256_hex(nso) + file_sha(P.game + L"\\exefs\\sdk") +
+    // the generator: the generated code is reused if the game and the generator are the same (gen.key)
+    std::string key = std::string(BUILDER_VERSION) + GAMELIB_ID + sha256_hex(nso) + file_sha(P.game + L"\\exefs\\sdk") +
                       file_sha(P.src + L"\\hle_symbols.txt");
     for (const wchar_t *f : {L"gen.py", L"lifter.py", L"analyze.py", L"nso.py", L"passes.py", L"patches.py", L"simd_c.py",
                              L"game_addresses.py"})
         key += file_sha(P.py + L"\\gen\\tools\\" + f);
     key = sha256_hex(key);
     std::string done;
-    int files[2] = {0, 0};  // trozos de main y de sdk
+    int files[2] = {0, 0};  // chunks of main and sdk
     bool reuse_gen = read_file(P.work + L"\\gen.key", done) && done.compare(0, 64, key) == 0 &&
                      sscanf(done.c_str() + 64, " %d %d", &files[0], &files[1]) == 2 && files[0] > 0 && files[1] > 0;
     const char *const *mods = g_mods;
@@ -821,31 +834,31 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
     if (reuse_gen) {
         gs->state[0] = 1, gs->state[1] = 1;
         gs->files_final[0] = files[0], gs->files_final[1] = files[1];
-        g_log("lo generado sirve (main %d trozos, sdk %d)", files[0], files[1]);
+        g_log("the generated code is still good (main %d chunks, sdk %d)", files[0], files[1]);
     } else {
-        // (#337 de LAS Recomp: con Control Flow Guard activo, unicorn hace caer el proceso de golpe; el instalador se
-        // vuelve a abrir sin él, así que aquí solo llega si no pudo)
+        // (LAS Recomp #337: with Control Flow Guard active, unicorn takes the process down outright; the installer
+        // reopens itself without it, so this is only reached if it could not)
         PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg = {};
         if (GetProcessMitigationPolicy(GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg, sizeof cfg) &&
             cfg.EnableControlFlowGuard)
-            return fail(why, why_cap, "Windows impone Control Flow Guard a este proceso y el generador (unicorn) no puede "
-                                      "funcionar con él");
-        if (cancelled()) return fail(why, why_cap, "cancelado");
+            return fail(why, why_cap, TR("Windows forces Control Flow Guard on this process and the generator (unicorn) "
+                                      "cannot work with it"));
+        if (cancelled()) return fail(why, why_cap, TR("canceled"));
         files[0] = files[1] = 0;
         DeleteFileW(lp(P.work + L"\\gen.key").c_str());
         for (int i = 0; i < 2; i++) {
             gs->log[i] = P.work + L"\\gen_" + wide(mods[i]) + L".log";
             DeleteFileW(lp(gs->log[i]).c_str());
-            if (exists(gs->log[i]))  // (abierto por otro programa: no se lee el de la vez anterior por error)
+            if (exists(gs->log[i]))  // (open in another program: the previous run's is not read by mistake)
                 gs->log[i] = P.work + L"\\gen_" + wide(mods[i]) + L"." + std::to_wstring(GetTickCount()) + L".log";
         }
         std::string err;
-        if (!py_load(P.py, err)) return fail(why, why_cap, "el generador no arranca: " + err);
+        if (!py_load(P.py, err)) return fail(why, why_cap, TR("the generator does not start: ") + err);
         gs->running = true;
         g_last_gen = gs;
-        HANDLE h = hilo_grande([gs] {
-            // el sdk primero (8 s), después main (45 s): sus trozos se compilan mientras. Cada uno, al acabar bien:
-            // primero su número final de trozos (de su registro entero), después state = 1
+        HANDLE h = big_thread([gs] {
+            // the sdk first (8 s), then main (45 s): their chunks are compiled meanwhile. Each one, on finishing
+            // successfully: first its final chunk count (from its whole log), then state = 1
             for (int i : {1, 0}) {
                 std::string e;
                 gs->started[i] = true;
@@ -854,7 +867,8 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
                 int n = 0;
                 if (r == 0) {
                     gen_progress(gs->log[i], ci, all, n);
-                    if (n <= 0) r = 1, e = std::string("el registro del generador (") + g_mods[i] + ") no dice cuántos trozos escribió";
+                    if (n <= 0) r = 1, e = std::string("the generator's log (") + g_mods[i] + ") does not say how many "
+                                                                                                    "chunks it wrote";
                 }
                 if (r != 0) {
                     {
@@ -868,7 +882,7 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
                 gs->files_final[i] = n;
                 gs->state[i] = 1;
             }
-            // (lo generado sirve para la próxima vez aunque esta se cancele mientras se compila)
+            // (the generated code is good for next time even if this one is canceled while compiling)
             if (gs->state[0] == 1 && gs->state[1] == 1)
                 write_file(gs->P.work + L"\\gen.key", gs->key + " " + std::to_string(gs->files_final[0]) + " " +
                                                          std::to_string(gs->files_final[1]) + "\n");
@@ -876,12 +890,12 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
         });
         if (!h) {
             gs->running = false;
-            return fail(why, why_cap, "no se pudo crear el hilo del generador (error " + std::to_string(GetLastError()) + ")");
+            return fail(why, why_cap, TR("the generator's thread could not be created (error ") + std::to_string(GetLastError()) + ")");
         }
-        CloseHandle(h);  // (suelto: acaba solo)
+        CloseHandle(h);  // (detached: it finishes on its own)
     }
 
-    // los trozos, a medida que salen; un grupo de hilos los compila
+    // the chunks, as they come out; a thread pool compiles them
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
@@ -901,14 +915,14 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
     g_last_build = bs;
     for (int i = 0; i < njobs; i++) {
         b.alive++;
-        HANDLE h = hilo_grande([bs] { compile_worker(bs); });
+        HANDLE h = big_thread([bs] { compile_worker(bs); });
         if (h) pool.push_back(h);
         else b.alive--;
     }
     if (pool.empty()) {
         std::lock_guard<std::mutex> g(qm);
         failed = true, stop = true;
-        return fail(why, why_cap, "no se pudo crear ningún hilo de compilación (error " + std::to_string(GetLastError()) + ")");
+        return fail(why, why_cap, TR("no compiler thread could be created (error ") + std::to_string(GetLastError()) + ")");
     }
     int queued[2] = {0, 0};
     bool tables[2] = {false, false};
@@ -917,15 +931,15 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
     for (;;) {
         if (cancelled()) {
             std::lock_guard<std::mutex> g(qm);
-            if (!failed) failed = true, b.fail_msg = "cancelado (lo compilado se guarda)";
+            if (!failed) failed = true, b.fail_msg = TR("canceled (what was compiled is kept)");
             stop = true;
             b.queue.clear();
             qcv.notify_all();
         }
         bool gens_done = true;
         for (int i = 0; i < 2; i++) {
-            // (el estado primero: con state = 1, files_final ya es el número entero de trozos, y la tabla, que va la
-            // última, nunca sale antes que alguno de sus trozos)
+            // (the state first: with state = 1, files_final is already the full chunk count, and the table, which goes
+            // last, never comes out before one of its chunks)
             int st = gs->state[i];
             if (st == 1 && files[i] < gs->files_final[i]) files[i] = gs->files_final[i];
             if (!reuse_gen && st == 0 && gs->started[i]) gen_progress(gs->log[i], gci[i], gall[i], files[i]);
@@ -936,7 +950,7 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
                     e = gs->err;
                 }
                 std::lock_guard<std::mutex> g2(qm);
-                failed = true, b.fail_msg = e.empty() ? "el generador falló" : e;
+                failed = true, b.fail_msg = e.empty() ? TR("the generator failed") : e;
                 stop = true;
                 qcv.notify_all();
             }
@@ -958,7 +972,8 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
         }
         if (failed && stop) break;
         if (gens_done && nd == total) break;
-        // el avance: lo generado (15 %), lo compilado (mitad bytes, mitad archivos) y el enlace (el 5 % final)
+        // the progress: what was generated (15%), what was compiled (half bytes, half files) and the link (the final
+        // 5%)
         double gf = reuse_gen ? 1 : 0;
         if (!reuse_gen) {
             for (int i = 0; i < 2; i++)
@@ -977,9 +992,9 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
         if (f > shown) shown = f;
         wchar_t s[200];
         if (!gens_done && gf < 1)
-            swprintf(s, 200, L"traduciendo el código del juego a C y compilando (%zu archivos listos)", nd);
+            swprintf(s, 200, trw(L"translating the game code to C and compiling it (%zu files done)"), nd);
         else
-            swprintf(s, 200, L"compilando (%zu de %zu archivos)", nd, total);
+            swprintf(s, 200, trw(L"compiling (%zu of %zu files)"), nd, total);
         step(shown, s);
         Sleep(150);
     }
@@ -991,51 +1006,53 @@ extern "C" __declspec(dllexport) int construir_juego(const wchar_t *dest, int jo
         qcv.notify_all();
     }
     if (failed) {
-        // (los hilos acaban por su cuenta el archivo que tengan entre manos; la siguiente construcción los espera)
+        // (the threads finish on their own the file they have in hand; the next build waits for them)
         for (HANDLE h : pool) CloseHandle(h);
         int busy = b.alive;
-        if (busy) g_log("%d hilos de compilación acaban en segundo plano el archivo que tenían", busy);
+        if (busy) g_log("%d compiler threads are finishing the file they had in the background", busy);
         return fail(why, why_cap, fail_msg);
     }
-    for (HANDLE h : pool) WaitForSingleObject(h, INFINITE), CloseHandle(h);  // (sin trabajo: salen enseguida)
-    while (gs->running) Sleep(10);  // (ya dijo que acabó: sale enseguida; gen.key ya lo escribió él)
-    g_log("compilados %zu archivos (%zu reutilizados) en %lu s", units.size(), (size_t)nreused, (GetTickCount() - t0) / 1000);
+    for (HANDLE h : pool) WaitForSingleObject(h, INFINITE), CloseHandle(h);  // (no work: they exit right away)
+    while (gs->running) Sleep(10);  // (it already said it is done: exits right away; it wrote gen.key itself)
+    g_log("compiled %zu files (%zu reused) in %lu s", units.size(), (size_t)nreused, (GetTickCount() - t0) / 1000);
 
-    // el enlace: gamelib_entry, game_overrides (antes que el código generado) y los trozos
-    step(0.95, L"enlazando");
+    // the link: gamelib_entry, game_overrides (ahead of the generated code) and the chunks
+    step(0.95, trw(L"linking"));
     std::vector<std::wstring> objs;
     for (auto &u : units) objs.push_back(u.obj);
     std::wstring out = P.game + L"\\lasgame.dll", tmp = P.work + L"\\lasgame.dll.tmp";
     std::string diag;
     DWORD tl = GetTickCount();
     bool linked = link_lib(P, objs, tmp, diag);
-    g_log("enlace: %.1f s", (GetTickCount() - tl) / 1000.0);
+    g_log("link: %.1f s", (GetTickCount() - tl) / 1000.0);
     if (!linked) {
         write_file(P.work + L"\\link.log", diag);
-        // (algo de lo guardado no vale —un objeto estropeado, una cuenta de trozos mala—: la próxima vez, todo de nuevo)
+        // (something that was kept is bad, a corrupted object or a wrong chunk count: next time, everything from
+        // scratch)
         DeleteFileW(lp(P.work + L"\\gen.key").c_str());
         DeleteFileW(lp(P.work + L"\\base.txt").c_str());
         size_t k = diag.find('\n');
-        return fail(why, why_cap, "el código del juego no enlaza: " + (k == std::string::npos ? diag : diag.substr(0, k)) +
-                                      " (lo guardado se descarta: al volver a instalar se genera y compila todo de nuevo)");
+        return fail(why, why_cap, TR("the game code does not link: ") + (k == std::string::npos ? diag : diag.substr(0, k)) +
+                                      TR(" (what was saved is discarded: installing again generates and compiles "
+                                      "everything from scratch)"));
     }
-    // (sin .cpu, el programa exige lo más alto, x86-64-v3: mientras se cambia la biblioteca nunca hay código marcado
-    // para una CPU que no es la suya)
+    // (without a .cpu, the program requires the highest, x86-64-v3: while the library is being swapped there is never
+    // code marked for a CPU that is not its own)
     DeleteFileW(lp(out + L".cpu").c_str());
     if (!MoveFileExW(lp(tmp).c_str(), lp(out).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
-        return fail(why, why_cap, "no se pudo escribir extracted\\lasgame.dll (¿está el juego abierto?)");
+        return fail(why, why_cap, TR("extracted\\lasgame.dll could not be written (is the game open?)"));
     write_file(out + L".id", full_id + "\n");
     write_file(out + L".cpu", cpu + "\n");
-    remove_tree(P.game + L"\\.gamebuild");  // (la caché de la 0.47.0, con zig: ya no sirve)
+    remove_tree(P.game + L"\\.gamebuild");  // (0.47.0's cache, with zig: no longer of any use)
     PROCESS_MEMORY_COUNTERS pm = {sizeof pm};
     GetProcessMemoryInfo(GetCurrentProcess(), &pm, sizeof pm);
-    g_log("lasgame.dll lista: %.0f MB, %lu s en total, memoria máxima del proceso %.1f GB", file_bytes(out) / 1e6,
+    g_log("lasgame.dll ready: %.0f MB, %lu s in total, peak memory of the process %.1f GB", file_bytes(out) / 1e6,
           (GetTickCount() - t0) / 1000, pm.PeakWorkingSetSize / 1073741824.0);
-    step(1, L"listo");
+    step(1, trw(L"done"));
     return 0;
 }
 
-// (si alguien descargase construir.dll, su manejador de excepciones no debe quedarse apuntando a código que ya no está)
+// (if anyone unloaded builder.dll, its exception handler must not be left pointing at code that is gone)
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_DETACH && !reserved && g_guard_veh) RemoveVectoredExceptionHandler(g_guard_veh);
     return TRUE;

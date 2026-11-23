@@ -13,16 +13,16 @@ static uint64_t next_debug_id = 1;
 
 // ================================================================== device
 // NVNdeviceInfo -> value
-// SMRPG: valores medidos en una Tegra X1 (los recoge nxnative, dm/gfx/nvn/hle_nvn.c g_devinfo: nvnDeviceGetInteger
-// propiedad por propiedad en la consola, y la tabla de constantes del NVN que va dentro del sdk de los juegos), de la
-// 0x02 a la 0x68. La tabla de LASRecomp llegaba hasta la 0x40, con varias entradas que no eran las de la consola. Unity
-// (SMRPG) pide la 0x5E, SEPARATE_TEXTURE_BINDINGS_PER_STAGE, y la guarda como el máximo de texturas por shader
-// (GraphicsCaps+0xec): con 0, todo shader con una textura fallaba al crearse («uses 1 texture parameters, more than the 0
-// supported»), sus parámetros se quedaban sin preparar (tamaño 0) y la orden SetShaders desalineaba el búfer de órdenes
-// del hilo gráfico. La versión de la API se queda en la que espera SMRPG (NVN 53.207).
+// SMRPG: values measured on a Tegra X1 (collected by nxnative, dm/gfx/nvn/hle_nvn.c g_devinfo: nvnDeviceGetInteger
+// property by property on the console, and the NVN constant table inside the games' sdk), from 0x02 to 0x68.
+// LASRecomp's table went up to 0x40, with several entries that weren't the console's. Unity (SMRPG) asks for 0x5E,
+// SEPARATE_TEXTURE_BINDINGS_PER_STAGE, and keeps it as the maximum number of textures per shader (GraphicsCaps+0xec):
+// with 0, every shader with a texture failed to create ("uses 1 texture parameters, more than the 0 supported"), its
+// parameters were left unprepared (size 0) and the SetShaders command misaligned the graphics thread's command buffer.
+// The API version stays at the one SMRPG expects (NVN 53.207).
 static uint32_t device_integer(uint32_t which) {
     static const uint32_t v[] = {
-        [0x00] = 53, [0x01] = 207,  // versión de la API
+        [0x00] = 53, [0x01] = 207,  // API version
         [0x02] = 14, [0x03] = 65536, [0x04] = 256, [0x05] = 8, [0x06] = 16, [0x07] = 4, [0x08] = 16, [0x09] = 32,
         [0x0A] = 16, [0x0B] = 4, [0x0C] = 4, [0x0D] = 4, [0x0E] = 16, [0x0F] = 32, [0x10] = 32, [0x11] = 256, [0x12] = 256,
         [0x13] = 4, [0x14] = 8, [0x15] = 512, [0x16] = 256, [0x17] = 2, [0x18] = 256, [0x19] = 4096, [0x1A] = 131072,
@@ -37,9 +37,9 @@ static uint32_t device_integer(uint32_t which) {
         [0x5D] = 4096, [0x5E] = 128, [0x5F] = 32, [0x60] = 65535, [0x61] = 1, [0x62] = 32, [0x63] = 256, [0x64] = 16,
         [0x65] = 65535, [0x66] = 65535, [0x67] = 256, [0x68] = 16383,
     };
-    if (which >= sizeof v / sizeof *v) {  // (avisar una vez por propiedad: un 0 silencioso costó encontrar la 0x5E)
+    if (which >= sizeof v / sizeof *v) {  // (warn once per property: a silent 0 made 0x5E hard to find)
         static uint8_t seen[256];
-        if (which < 256 && !seen[which]++) LOG("[nvn] DeviceGetInteger %#x desconocida: 0\n", which);
+        if (which < 256 && !seen[which]++) LOG("[nvn] DeviceGetInteger %#x unknown: 0\n", which);
         return 0;
     }
     return v[which];
@@ -64,7 +64,7 @@ NVN(nvnDeviceFinalize) { (void)c; }
 NVN(nvnDeviceSetDebugLabel) { (void)c; }
 NVN(nvnDeviceGetInteger) {
     *(int32_t *)AP(2) = (int32_t)device_integer((uint32_t)A(1));
-    if (getenv("LARECOMP_NVN_INFO_LOG"))  // (SMRPG, diagnóstico) qué propiedades del dispositivo pide el juego y desde dónde
+    if (getenv("LARECOMP_NVN_INFO_LOG"))  // (SMRPG, diagnostics) which device properties the game asks for and from where
         LOG("[nvn] DeviceGetInteger %u -> %d (lr %llx)\n", (uint32_t)A(1), *(int32_t *)AP(2), (unsigned long long)c->x[30]);
 }
 NVN(nvnDeviceGetCurrentTimestampInNanoseconds) {
@@ -463,23 +463,23 @@ static NvnTexture *texture_from_builder(uint64_t b) {
 
 NVN(nvnTextureInitialize) {
     NvnTexture *t = texture_from_builder(A(1));
-    // (SMRPG) Pantalla ancha: Unity reserva sus texturas de ventana (DISPLAY) a 1920x1080 sea cual sea su pantalla y
-    // dibuja en una parte; con una pantalla del juego más ancha (runtime/hle/unity_screen.c, que corre antes) la
-    // imagen quedaba recortada a la derecha. Se crean al tamaño de la pantalla del juego, y lo siguen si cambia en
-    // marcha (t->screen: vulkan/textures.c screen_follow); solo las dibuja la GPU.
+    // (SMRPG) Widescreen: Unity allocates its window textures (DISPLAY) at 1920x1080 whatever its screen is and draws
+    // into a part of them; with a wider game screen (runtime/hle/unity_screen.c, which runs earlier) the picture was
+    // cropped on the right. They are created at the size of the game's screen, and follow it if it changes on the fly
+    // (t->screen: vulkan/textures.c screen_follow); only the GPU draws them.
     {
         extern int g_guest_w, g_guest_h;
-        // (y la profundidad del backbuffer: Unity la crea también a 1920x1080; la de la escena ya va al tamaño de la
-        // pantalla. Una pasada mide lo que el menor de sus adjuntos, así que con ella a 1920 se recortaba igual. Con
-        // la pantalla del juego en 16:9 también entran las profundidades de la escena, de 1920x1080: al cambiar la
-        // pantalla Unity hace otras a la nueva medida, así que seguirla no les cambia nada)
+        // (and the backbuffer's depth: Unity creates it at 1920x1080 too; the scene's is already at the screen's size.
+        // A pass is as large as the smallest of its attachments, so with it at 1920 the picture was cropped just the
+        // same. With the game's screen at 16:9 the scene's 1920x1080 depth buffers qualify too: when the screen changes
+        // Unity makes new ones at the new size, so following it changes nothing for them)
         bool depth = t->format >= 0x31 && t->format <= 0x36;
         if (((t->flags & 1) || depth) && t->target == 1 && t->width == 1920 && t->height == 1080) {
             t->screen = true;
             static int nlog;
             if (nlog++ < 8)
-                LOG("[nvn] textura de pantalla n.º %llu (%s, formato %#x, flags %#x): 1920x1080 -> %dx%d\n",
-                    (unsigned long long)t->debug_id, depth ? "profundidad" : "ventana", t->format, t->flags, g_guest_w, g_guest_h);
+                LOG("[nvn] screen texture no. %llu (%s, format %#x, flags %#x): 1920x1080 -> %dx%d\n",
+                    (unsigned long long)t->debug_id, depth ? "depth" : "window", t->format, t->flags, g_guest_w, g_guest_h);
             if (g_guest_w != 1920 || g_guest_h != 1080) {
                 t->width = (uint32_t)g_guest_w;
                 t->height = (uint32_t)g_guest_h;
@@ -498,14 +498,14 @@ NVN(nvnTextureInitialize) {
 }
 static void pool_entries_forget(NvnTexture *t);
 // The end of a finalized texture: its texture pool slots emptied (pool_entries_forget), the backend's copy, the host
-// object. With the render thread, it runs there in queue order (rq_destroy_texture): lists queued before the
-// finalize still sample it through its slots, as they did when they were translated at submit; lists queued after
-// it see the slots empty, as without the render thread. (The NvnTexture stays allocated until then, so no other
-// texture can take its address while a slot still names it.)
-// (SMRPG) El objeto no se libera enseguida: un command buffer grabado antes del Finalize y enviado después lo nombra
-// todavía (en la consola es válido: la orden escribe la memoria del pool; aquí una copia leyó un NvnTexture ya liberado
-// y reutilizado: backend = 1, fallo en tex_backend). Queda marcado y en un cementerio de 4.096 objetos; el renderizador
-// salta lo que llegue a uno muerto (exec.c tex_dead).
+// object. With the render thread, it runs there in queue order (rq_destroy_texture): lists queued before the finalize
+// still sample it through its slots, as they did when they were translated at submit; lists queued after it see the
+// slots empty, as without the render thread. (The NvnTexture stays allocated until then, so no other texture can take
+// its address while a slot still names it.)
+// (SMRPG) The object isn't freed right away: a command buffer recorded before the Finalize and submitted after it still
+// names it (on the console that is valid: the command writes the pool's memory; here a copy read an NvnTexture already
+// freed and reused: backend = 1, a fault in tex_backend). It is marked and kept in a graveyard of 4,096 objects; the
+// renderer skips whatever reaches a dead one (exec.c tex_dead).
 void nvn_texture_destroy(NvnTexture *t) {
     static NvnTexture *grave[4096];
     static unsigned ngrave;
@@ -544,14 +544,15 @@ NVN(nvnTextureGetSwizzle) { for (int i = 0; i < 4; i++) *(uint32_t *)AP(1 + i) =
 NVN(nvnTextureGetDepthStencilMode) { RET(TEX->ds_mode); }
 NVN(nvnTextureGetStride) { RET(TEX->stride); }
 NVN(nvnTextureGetTextureAddress) { RET(TEX->addr); }
-// SMRPG: el pool que el juego dio al builder (antes 0: Unity sube una textura con GetMemoryPool + GetMemoryOffset +
-// nvnMemoryPoolMap + memcpy + nvnMemoryPoolFlushMappedRange, y con 0 el runtime leía un pool nulo).
+// SMRPG: the pool the game gave the builder (it was 0 before: Unity uploads a texture with GetMemoryPool +
+// GetMemoryOffset + nvnMemoryPoolMap + memcpy + nvnMemoryPoolFlushMappedRange, and with 0 the runtime read a null
+// pool).
 NVN(nvnTextureGetMemoryPool) { RET(HOST(NvnTexture, A(0))->pool_guest); }
 NVN(nvnTextureGetMemoryOffset) { RET(TEX->pool_offset); }
 NVN(nvnTextureGetStorageSize) { RET(tegra_total_size(&TEX->layout)); }
 NVN(nvnTextureGetDebugID) { RET(TEX->debug_id); }
-// SMRPG: el desplazamiento de una vista (su primer nivel y su primera capa) dentro de la memoria de la textura (antes
-// siempre 0): sirve para subir cada mipmap o capa por separado.
+// SMRPG: the offset of a view (its first level and its first layer) inside the texture's memory (always 0 before): used
+// to upload each mipmap or layer separately.
 NVN(nvnTextureGetViewOffset) {
     NvnTexture *t = HOST(NvnTexture, A(0));
     const NvnTextureView *v = A(1) ? (const NvnTextureView *)AP(1) : NULL;
@@ -570,8 +571,8 @@ NVN(nvnTextureCompare) { RET(A(0) == A(1)); }
 NVN(nvnTextureFlushTexels) { (void)c; }
 NVN(nvnTextureInvalidateTexels) { (void)c; }
 
-// Texture views (our 16-byte layout of the guest struct: NvnTextureView in nvn.h). SMRPG: con los campos de la
-// estructura, sin desplazamientos fijos, para no pasar nunca de los 16 bytes que reserva el juego.
+// Texture views (our 16-byte layout of the guest struct: NvnTextureView in nvn.h). SMRPG: using the struct's fields,
+// with no fixed offsets, so as never to go past the 16 bytes the game reserves.
 #define TVP ((NvnTextureView *)AP(0))
 NVN(nvnTextureViewSetDefaults) { memset(AP(0), 0, sizeof(NvnTextureView)); }
 NVN(nvnTextureViewSetLevels) { TVP->setmask |= 1; TVP->base_level = (uint8_t)A(1); TVP->num_levels = (uint8_t)A(2); }
@@ -592,10 +593,10 @@ NVN(nvnTextureViewGetDepthStencilMode) { *(uint32_t *)AP(1) = TVP->ds_mode; RET(
 NVN(nvnTextureViewGetTarget) { *(uint32_t *)AP(1) = TVP->target; RET(!!(TVP->setmask & 32)); }
 NVN(nvnTextureViewCompare) { RET(memcmp(AP(0), AP(1), sizeof(NvnTextureView)) == 0); }
 
-// (SMRPG) WriteTexels / WriteTexelsStrided: datos lineales en una región de la textura. El nivel de mip y la primera
-// capa vienen de la vista; z es la capa (array, cubo) o el corte (3D, target 2); las texturas lineales (flag 0x10)
-// llevan sus filas a t->stride. Antes solo se escribía el nivel 0 entero (y una textura array con varias capas, como
-// cortes 3D seguidos); lo demás era «partial WriteTexels not implemented» (171 veces en un arranque de SMRPG).
+// (SMRPG) WriteTexels / WriteTexelsStrided: linear data into a region of the texture. The mip level and the first layer
+// come from the view; z is the layer (array, cube) or the slice (3D, target 2); linear textures (flag 0x10) have their
+// rows at t->stride. Before, only the whole of level 0 was written (and an array texture with several layers, as
+// consecutive 3D slices); everything else was "partial WriteTexels not implemented" (171 times in one SMRPG boot).
 static void write_texels(NvnTexture *t, const NvnTextureView *v, const int32_t *r, const uint8_t *src, uint64_t row_pitch,
                          uint64_t slice_pitch) {
     if (!t || !src || !r || !t->addr) return;
@@ -614,22 +615,22 @@ static void write_texels(NvnTexture *t, const NvnTextureView *v, const int32_t *
     static int logn = -1;
     if (logn < 0) logn = getenv("LARECOMP_LOG_WRITETEXELS") ? 0 : 1 << 30;
     if (logn < 200 && logn++ >= 0)
-        LOG("[nvn] WriteTexels %ux%u fmt %#x target %u nivel %u capa %u región %d,%d,%d %dx%dx%d paso %llu/%llu%s\n", t->width,
+        LOG("[nvn] WriteTexels %ux%u fmt %#x target %u level %u layer %u region %d,%d,%d %dx%dx%d stride %llu/%llu%s\n", t->width,
             t->height, t->format, t->target, level, layer0, x, y, z, w, h, d, (unsigned long long)row_pitch,
-            (unsigned long long)slice_pitch, t->flags & 0x10 ? " lineal" : "");
+            (unsigned long long)slice_pitch, t->flags & 0x10 ? " linear" : "");
     if (xb >= l.wb || yb >= l.hb) return;
     if (xb + wb > l.wb) wb = l.wb - xb;
     if (yb + hb > l.hb) hb = l.hb - yb;
     uint8_t *base = (uint8_t *)(uintptr_t)t->addr;
-    if (t->flags & 0x10) {  // lineal: un solo nivel y capa, filas a t->stride
+    if (t->flags & 0x10) {  // linear: a single level and layer, rows at t->stride
         for (int32_t k = 0; k < d && k < 1; k++)
             for (uint32_t row = 0; row < hb; row++)
                 memcpy(base + (uint64_t)(yb + row) * t->stride + (uint64_t)xb * f->bpb, src + (uint64_t)row * src_row,
                        (size_t)wb * f->bpb);
-    } else if (t->target == 2) {  // 3D: cortes del nivel
+    } else if (t->target == 2) {  // 3D: slices of the level
         tegra_swizzle_region(src, src_row, src_slice, base + l.offset, l.wb, l.hb, f->bpb, l.block_height_log2,
                              l.block_depth_log2, xb, yb, (uint32_t)z, wb, hb, (uint32_t)d);
-    } else {  // 2D, array, cubo: z es la capa
+    } else {  // 2D, array, cube: z is the layer
         uint64_t layer_size = tegra_layer_size(&t->layout);
         uint32_t nl = t->layout.layers ? t->layout.layers : 1;
         for (int32_t k = 0; k < d; k++) {

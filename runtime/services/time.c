@@ -84,9 +84,9 @@ static void timezone_service(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
     case 0: memcpy(resp->data, "UTC", 4); resp_size(resp, 0x24); break;  // GetDeviceLocationName
-    // (SMRPG) ToCalendarTime con la regla que el juego cargó (LoadTimeZoneRule, que aquí no la rellena): la única que
-    // tiene es la del dispositivo, así que la hora local del PC, como WithMyRule. Unity (DateTime.Now) va por aquí:
-    // la fecha de los guardados salía en UTC en vez de en la hora local
+    // (SMRPG) ToCalendarTime with the rule the game loaded (LoadTimeZoneRule, which doesn't fill it in here): the only
+    // one it has is the device's, so the PC's local time, like WithMyRule. Unity (DateTime.Now) goes through here: the
+    // date of the saves came out in UTC instead of local time
     case 100: to_calendar(IN(int64_t, 0), resp, 0); break;  // ToCalendarTime(rule buffer)
     case 101: to_calendar(IN(int64_t, 0), resp, 0); break;  // ToCalendarTimeWithMyRule
     case 201: case 202: {  // ToPosixTime(rule) / ToPosixTimeWithMyRule -> count + buffer of posix times

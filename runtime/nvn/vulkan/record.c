@@ -83,8 +83,8 @@ static RecPipeResolve pipe_resolve;
 static int wait_pipes = -1;
 
 bool rec_on(void) { return on > 0; }
-// (SMRPG) La cola del juego: es de este hilo, pero la swapchain de AMD (vk_fg.cpp) entrega en ella con este cerrojo, por
-// si alguna versión lo hiciera desde otro de sus hilos; las entregas y presentaciones de aquí también lo toman.
+// (SMRPG) The game queue: it belongs to this thread, but AMD's swapchain (vk_fg.cpp) submits to it under this lock, in
+// case some version did so from another of its threads; the submissions and presents made here take it too.
 static pthread_mutex_t queue_mu = PTHREAD_MUTEX_INITIALIZER;
 void vk_queue_lock(void) { pthread_mutex_lock(&queue_mu); }
 void vk_queue_unlock(void) { pthread_mutex_unlock(&queue_mu); }
@@ -167,7 +167,7 @@ static inline void *after(const void *args, size_t args_size) { return (uint8_t 
 // ---- the thread
 static void *run(void *arg) {
     (void)arg;
-    plat_thread_name("recorder");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("recorder");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     plat_thread_perf_core(PLAT_PERF_RENDER);  // (Windows hybrid CPUs: the performance cores, as the render thread)
     rq_watch(NULL, 0);                        // (the hang dump knows this thread)
     uint64_t t = 0;
@@ -605,21 +605,21 @@ void rec_QueueSubmit2(const VkSubmitInfo2 *si, uint64_t seq) {
     ENQ_END();
 }
 
-typedef struct { VkSemaphore wait; VkSwapchainKHR swapchain; uint32_t image; bool fg; } PresentArgs;  // (fg: la swapchain de AMD)
-void vk_lsfg_flush_pending(void);  // (SMRPG: vk_lsfg.c, la real que la generación de Lossless Scaling dejó para después)
+typedef struct { VkSemaphore wait; VkSwapchainKHR swapchain; uint32_t image; bool fg; } PresentArgs;  // (fg: AMD's swapchain)
+void vk_lsfg_flush_pending(void);  // (SMRPG: vk_lsfg.c, the real frame Lossless Scaling generation left for later)
 static void present_run(const void *p) {
     const PresentArgs *a = p;
-    vk_lsfg_flush_pending();  // (antes que esta: el orden de la pantalla)
+    vk_lsfg_flush_pending();  // (before this one: the order on screen)
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &a->wait,
                            .swapchainCount = 1, .pSwapchains = &a->swapchain, .pImageIndices = &a->image};
-    // (SMRPG Android) su momento en la pantalla: vk_pacing.c
+    // (SMRPG Android) its time on screen: vk_pacing.c
     VkPresentTimeGOOGLE pt;
     VkPresentTimesInfoGOOGLE pti = {.sType = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE, .swapchainCount = 1, .pTimes = &pt};
     if (!a->fg && vk_pacing_time(a->swapchain, &pt)) pi.pNext = &pti;
     uint64_t t0 = NOW();
     rq_watch("vkQueuePresentKHR", a->image);
     VkResult r;
-    if (a->fg) r = vk_fg_present(g_vk.queue, &pi);  // (SMRPG: AMD entrega su trabajo dentro, con el cerrojo de la cola)
+    if (a->fg) r = vk_fg_present(g_vk.queue, &pi);  // (SMRPG: AMD submits its work inside, under the queue lock)
     else {
         vk_queue_lock();
         r = vkQueuePresentKHR(g_vk.queue, &pi);
@@ -634,9 +634,9 @@ static void present_run(const void *p) {
     }
     __atomic_fetch_add(&g_vk_frame_waits[3], 1, __ATOMIC_RELAXED);
 #ifdef __ANDROID__
-    // (SMRPG Android: Android responde SUBOPTIMAL en cada presentación si el giro lo hace el compositor —la cadena va
-    // sin giro, device.c create_swapchain—: no es motivo para rehacerla; un cambio de tamaño llega como OUT_OF_DATE
-    // o por la ventana)
+    // (SMRPG Android: Android answers SUBOPTIMAL to every present when the compositor does the rotation (the swapchain
+    // isn't rotated: device.c create_swapchain), which is no reason to recreate it; a size change arrives as
+    // OUT_OF_DATE or through the window)
     if (r == VK_SUBOPTIMAL_KHR) r = VK_SUCCESS;
 #endif
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) atomic_store_explicit(&present_recreate, 1, memory_order_release);
@@ -669,8 +669,8 @@ void rec_QueuePresentKHR(VkSemaphore wait, VkSwapchainKHR swapchain, uint32_t im
 bool rec_present_recreate(void) { return atomic_exchange_explicit(&present_recreate, 0, memory_order_acq_rel) != 0; }
 void rec_request_recreate(void) { atomic_store_explicit(&present_recreate, 1, memory_order_release); }
 
-// (SMRPG) Una presentación hecha dentro de una llamada en orden (rec_QueuePresentCall): lo mismo que present_run (la
-// cola con su cerrojo, rehacer la cadena si caducó, un fallo del dispositivo) sin contarla; la llamada cuenta como una.
+// (SMRPG) A present made inside an in-order call (rec_QueuePresentCall): the same as present_run (the queue under its
+// lock, recreating the swapchain if it went out of date, a device failure) without counting it; the call counts as one.
 VkResult rec_present_direct(VkSemaphore wait, VkSwapchainKHR swapchain, uint32_t image) {
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = wait ? 1u : 0u, .pWaitSemaphores = &wait,
                            .swapchainCount = 1, .pSwapchains = &swapchain, .pImageIndices = &image};
@@ -680,17 +680,17 @@ VkResult rec_present_direct(VkSemaphore wait, VkSwapchainKHR swapchain, uint32_t
     vk_queue_unlock();
     __atomic_fetch_add(&g_vk_frame_waits[2], NOW() - t0, __ATOMIC_RELAXED);
 #ifdef __ANDROID__
-    if (r == VK_SUBOPTIMAL_KHR) r = VK_SUCCESS;  // (como present_run)
+    if (r == VK_SUBOPTIMAL_KHR) r = VK_SUCCESS;  // (like present_run)
 #endif
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) atomic_store_explicit(&present_recreate, 1, memory_order_release);
     else if (r == VK_ERROR_DEVICE_LOST) { vk_device_fault_report(); FATAL("vkQueuePresentKHR: device lost\n"); }
     return r;
 }
 
-// (SMRPG) Una función que hace presentaciones por su cuenta (la generación de fotogramas de Lossless Scaling,
-// vk_lsfg.c: envía su trabajo a la cola y presenta las imágenes generadas y la real) en ese punto del orden, en el hilo
-// grabador, que es el de la cola. Cuenta como una presentación (rec_presents_queued / rec_wait_presents): vk_frame_begin
-// no adquiere otra imagen hasta que acabe. Los datos (hasta 256 bytes) van copiados en el paquete.
+// (SMRPG) A function that does its own presents (Lossless Scaling frame generation, vk_lsfg.c: it submits its work to
+// the queue and presents the generated images and the real one) at that point in the order, on the recorder thread,
+// which owns the queue. It counts as one present (rec_presents_queued / rec_wait_presents): vk_frame_begin doesn't
+// acquire another image until it ends. The data (up to 256 bytes) is copied into the packet.
 typedef struct { void (*fn)(const void *); uint32_t size; } PresentCallArgs;
 static void present_call_run(const void *p) {
     const PresentCallArgs *a = p;
@@ -731,8 +731,8 @@ void rec_QueuePresentCall(void (*fn)(const void *), const void *data, size_t siz
     do { if (on <= 0) { vk##name(__VA_ARGS__); return; } ENQ_T0(); name##Args *a_ = push(name##_run, sizeof *a_, 0); \
          *a_ = (name##Args){__VA_ARGS__}; commit(); ENQ_END(); } while (0)
 
-// (SMRPG) Una función que graba sus propios vkCmd* (el SDK de AMD FSR, vulkan/vk_fsr.cpp) en ese punto del orden, en el
-// hilo grabador y con el búfer de comandos real; los datos (hasta 1 KB) van copiados en el paquete.
+// (SMRPG) A function that records its own vkCmd* (the AMD FSR SDK, vulkan/vk_fsr.cpp) at that point in the order, on
+// the recorder thread and with the real command buffer; the data (up to 1 KB) is copied into the packet.
 CMD_ARGS(CmdCallback, void (*fn)(VkCommandBuffer, const void *); uint32_t size;)
 static void CmdCallback_run(const void *p) {
     const CmdCallbackArgs *a = p;

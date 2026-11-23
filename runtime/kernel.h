@@ -32,11 +32,11 @@ struct KThread {
     int prio, core;
     bool cancel, in_sync_wait;
     bool is_main;  // the process's main thread (kernel_create_main_thread)
-    // SMRPG: pausa cooperativa (SetThreadActivity / GetThreadContext3: el «stop the world» del GC de IL2CPP).
-    // pause_req: pedida; paused: parado en un punto seguro (kernel_pause_point); in_svc: dentro de una llamada al
-    // sistema, con su estado de invitado ya guardado en cpu.
+    // SMRPG: cooperative pause (SetThreadActivity / GetThreadContext3: the IL2CPP GC's "stop the world"). pause_req:
+    // requested; paused: stopped at a safe point (kernel_pause_point); in_svc: inside a system call, with its guest
+    // state already saved in cpu.
     volatile bool pause_req, paused, in_svc;
-    // SMRPG: sus últimas llamadas al host (funciones HLE y llamadas al sistema), para los volcados de errores y cuelgues
+    // SMRPG: its last calls to the host (HLE functions and system calls), for the crash and hang dumps
     struct { const char *name; uint64_t x[4], lr; } calls[32];
     unsigned calls_n;
     // wait state (protected by g_klock)
@@ -84,13 +84,13 @@ void kernel_dump_threads(const char *prefix);
 // check fills why and returns true when it sees a hang (limit_ns: LARECOMP_HANG_DUMP); state logs its side.
 void kernel_hang_hooks(bool (*check)(uint64_t limit_ns, char *why, size_t n), void (*state)(const char *prefix));
 uint64_t kernel_heap_size(void);  // bytes from HEAP_BASE set by SetHeapSize
-// SMRPG: datos del proceso que main.c lee del main.npdm, para GetInfo (ID de programa y «system resource», que activa
-// la memoria virtual de nn::os).
+// SMRPG: process data that main.c reads from main.npdm, for GetInfo (program ID and "system resource", which enables
+// nn::os's virtual memory).
 void kernel_set_process_info(uint64_t program_id, uint64_t system_resource_size);
-// SMRPG: el hilo actual se para aquí si tiene una pausa pedida (punto seguro: FN_ENTER, rt_svc, llamadas al host).
+// SMRPG: the current thread stops here if it has a pause requested (safe point: FN_ENTER, rt_svc, calls to the host).
 void kernel_pause_point(void);
-// SMRPG: anota una llamada del hilo actual al host (nombre, x0-x3, desde dónde) e imprime las últimas de este hilo.
+// SMRPG: notes a call from the current thread to the host (name, x0-x3, from where) and prints this thread's last ones.
 void kernel_note_call(const char *name, const uint64_t *x, uint64_t lr);
 void kernel_print_current_calls(void);
-// SMRPG: el resultado que el juego dejó con am SetTerminateResult (0 = ninguno), para explicar un svcBreak.
+// SMRPG: the result the game left with am SetTerminateResult (0 = none), to explain an svcBreak.
 extern _Atomic uint32_t g_terminate_result;

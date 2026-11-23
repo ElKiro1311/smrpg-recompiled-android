@@ -1,7 +1,7 @@
-# apk_zip.py <base.apk> <carpeta dex> <carpeta lib> <salida.apk>: el APK sin alinear ni firmar. Copia lo que hizo aapt2
-# (el manifiesto, resources.arsc SIN comprimir —desde la API 30 se exige así—, los recursos y los assets) tal cual, con
-# su compresión, y añade el código Java (classes.dex) y las bibliotecas nativas (lib/<abi>/*.so, comprimidas: el
-# manifiesto pide extractNativeLibs). Después: zipalign y apksigner (tools/android/apk.sh).
+# apk_zip.py <base.apk> <dex folder> <lib folder> <output.apk>: the APK, neither aligned nor signed. It copies what aapt2 made
+# (the manifest, resources.arsc UNCOMPRESSED -required since API 30-, the resources and the assets) as is, with its
+# compression, and adds the Java code (classes.dex) and the native libraries (lib/<abi>/*.so, compressed: the manifest asks
+# for extractNativeLibs). Next: zipalign and apksigner (tools/android/apk.sh).
 import os
 import sys
 import zipfile

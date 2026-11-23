@@ -85,8 +85,8 @@ static bool hold_30(bool on) {
     extern uint64_t pace_test_game_mgr;
     uint64_t fw = pace_test_game_mgr;
 #else
-    // (SMRPG: el gestor del juego y su modo de 30 fps son de Link's Awakening; aquí GA(GAME_MGR) no apunta a nada y
-    // leerlo tumbaba el programa la primera vez que iba lento, p. ej. con el render por software del emulador)
+    // (SMRPG: the game manager and its 30 fps mode are Link's Awakening's; here GA(GAME_MGR) points to nothing and
+    // reading it crashed the program the first time it ran slow, e.g. with the emulator's software rendering)
     if (!g_game_las) return held = false;
     uint64_t fw = *(volatile uint64_t *)(uintptr_t)GA(GAME_MGR);
 #endif

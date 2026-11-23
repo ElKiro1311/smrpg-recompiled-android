@@ -32,20 +32,20 @@ static void am_init_once(void) {
     pthread_mutex_unlock(&g_klock);
 }
 
-// (SMRPG) Un mensaje del sistema para el juego (los recoge con ReceiveMessage): 30 cambio del modo de funcionamiento
-// (portátil / TV), 31 cambio del modo de rendimiento. Con el 31 Unity vuelve a pedir su resolución: así sigue la
-// pantalla del juego a la ventana en marcha (runtime/hle/unity_screen.c rt_unity_screen_follow; pruebas: LARECOMP_SET
-// "msg=<n>").
+// (SMRPG) A system message for the game (which collects them with ReceiveMessage): 30 operation mode change (handheld /
+// TV), 31 performance mode change. On 31 Unity requests its resolution again: that is how the game's screen follows the
+// window on the fly (runtime/hle/unity_screen.c rt_unity_screen_follow; tests: LARECOMP_SET "msg=<n>").
 void am_push_message(uint32_t msg) {
     am_init_once();
     pthread_mutex_lock(&g_klock);
     if (msg_count < (int)(sizeof msg_queue / sizeof msg_queue[0])) msg_queue[msg_count++] = msg;
     kernel_signal(msg_event);
     pthread_mutex_unlock(&g_klock);
-    LOG("[am] mensaje %u para el juego\n", msg);
+    LOG("[am] message %u for the game\n", msg);
 }
 
-// ¿Sigue en la cola sin que el juego lo haya recogido? (runtime/hle/unity_screen.c: no repetir el aviso mientras)
+// Is it still in the queue, not yet collected by the game? (runtime/hle/unity_screen.c: don't repeat the notification
+// meanwhile)
 bool am_message_pending(uint32_t msg) {
     am_init_once();
     pthread_mutex_lock(&g_klock);
@@ -70,7 +70,7 @@ static void common_state_getter(Service *s, IpcReq *req, IpcResp *resp) {
     case 1:  // ReceiveMessage
         pthread_mutex_lock(&g_klock);
         if (msg_count) {
-            if (getenv("LARECOMP_LOG_AM")) LOG("[am] el juego recoge el mensaje %u\n", msg_queue[0]);
+            if (getenv("LARECOMP_LOG_AM")) LOG("[am] the game picks up message %u\n", msg_queue[0]);
             OUT(uint32_t, 0) = msg_queue[0];
             memmove(msg_queue, msg_queue + 1, --msg_count * sizeof(uint32_t));
             if (!msg_count) msg_event->signaled = false;
@@ -187,7 +187,7 @@ static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
         resp_size(resp, 8);
         break;
     }
-    case 22: {  // SetTerminateResult: el error con el que el juego dice que se cierra (p. ej. 2162-0001 antes de abortar)
+    case 22: {  // SetTerminateResult: the error the game says it is closing with (e.g. 2162-0001 before aborting)
         uint32_t r = IN(uint32_t, 0);
         g_terminate_result = r;
         LOG("[am] SetTerminateResult %04u-%04u (0x%x)\n", 2000 + (r & 0x1FF), (r >> 9) & 0x1FFF, r);

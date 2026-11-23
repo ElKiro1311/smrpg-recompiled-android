@@ -29,7 +29,7 @@ void rec_QueueSubmit2(const VkSubmitInfo2 *si, uint64_t seq);
 // vkQueuePresentKHR(image of swapchain, after wait). The result reaches rec_present_recreate(); the wait inside the
 // driver (FIFO: until the display) is the recorder's, counted in g_vk_frame_waits[2].
 void rec_QueuePresentKHR(VkSemaphore wait, VkSwapchainKHR swapchain, uint32_t image);
-// (SMRPG) fn(data) en el hilo grabador, en orden, contada como una presentación; dentro, rec_present_direct presenta
+// (SMRPG) fn(data) on the recorder thread, in order, counted as one present; inside, rec_present_direct presents
 void rec_QueuePresentCall(void (*fn)(const void *), const void *data, size_t size);
 VkResult rec_present_direct(VkSemaphore wait, VkSwapchainKHR swapchain, uint32_t image);
 bool rec_present_recreate(void);  // (and clears it) the last present asked for a new swapchain (OUT_OF_DATE / SUBOPTIMAL)
@@ -91,7 +91,7 @@ void rec_CmdBindPipelineObj(VkCommandBuffer cb, VkPipelineBindPoint bp, void *ob
 void rec_CmdDraw(VkCommandBuffer cb, uint32_t count, uint32_t inst, uint32_t first, uint32_t first_inst);
 void rec_CmdDrawIndexed(VkCommandBuffer cb, uint32_t count, uint32_t inst, uint32_t first, int32_t base_vertex, uint32_t first_inst);
 void rec_CmdDispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z);
-// (SMRPG) fn(cb real, copia de data) en el hilo grabador, en este punto del orden (vulkan/vk_fsr.cpp)
+// (SMRPG) fn(real cb, copy of data) on the recorder thread, at this point in the order (vulkan/vk_fsr.cpp)
 void rec_CmdCallback(VkCommandBuffer cb, void (*fn)(VkCommandBuffer, const void *), const void *data, size_t size);
 void rec_CmdBindIndexBuffer(VkCommandBuffer cb, VkBuffer buf, VkDeviceSize off, VkIndexType type);
 void rec_CmdBindVertexBuffers(VkCommandBuffer cb, uint32_t first, uint32_t n, const VkBuffer *bufs, const VkDeviceSize *offs);

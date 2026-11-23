@@ -111,11 +111,11 @@ extern uint64_t maxwell_gmem_base, maxwell_gmem_size;
 // 0: one buffer.
 extern uint32_t maxwell_gmem_chunk_shift;
 extern bool maxwell_gmem_lazy;
-extern bool maxwell_no_int64;  // (SMRPG Android) sin enteros de 64 bits en la GPU: translate.c
+extern bool maxwell_no_int64;  // (SMRPG Android) no 64-bit integers on the GPU: translate.c
 // Lazy mode, fragment: a shader without discard / depth output / stores declares early fragment tests (its GMiss
-// atomics would turn them off); one with discard / depth output (no stores) counts no misses - the
-// runtime imports the bound storage buffers' chunks before the draw. true (LARECOMP_VK_GMEM_FS_MISS=1): every shader
-// counts, none declares early tests.
+// atomics would turn them off); one with discard / depth output (no stores) counts no misses - the runtime imports the
+// bound storage buffers' chunks before the draw. true (LARECOMP_VK_GMEM_FS_MISS=1): every shader counts, none declares
+// early tests.
 extern bool maxwell_gmem_fs_miss;
 // Lazy mode, vertex / fragment: the chunks under the draw's storage buffers (where the heap reads are) come as push
 // constants, GDirect { uvec4 gd[GMEM_DIRECT_MAX]; } (x = first word, y = words, 0: unused, z, w = device address), and

@@ -97,7 +97,7 @@ void slow_frame_present(uint64_t now, uint64_t gcpu) {
         char lv[64];
         bool play = level_check(now, &changed_at, lv, sizeof lv);
         if (!win_start) win_start = now;
-        // (SMRPG) LARECOMP_SLOW_FRAME_LOADS=1: los de las cargas también (los picos al entrar en una escena)
+        // (SMRPG) LARECOMP_SLOW_FRAME_LOADS=1: the ones during loads too (the spikes when entering a scene)
         static int loads = -1;
         if (loads < 0) loads = getenv("LARECOMP_SLOW_FRAME_LOADS") && atoi(getenv("LARECOMP_SLOW_FRAME_LOADS")) != 0;
         if ((!play || now - changed_at < LOAD_NS) && !loads) win_load++;

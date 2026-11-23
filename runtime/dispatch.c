@@ -138,7 +138,7 @@ GuestFn dispatch_lookup(uint64_t addr) {
 #define DCACHE 4096
 static __thread struct { uint64_t addr; GuestFn fn; } dcache[DCACHE];
 
-// SMRPG: cada llamada al host queda anotada en el hilo (kernel_note_call) para los volcados de errores y cuelgues.
+// SMRPG: every call to the host is noted on its thread (kernel_note_call) for the crash and hang dumps.
 void kernel_note_call(const char *name, const uint64_t *x, uint64_t lr);
 void kernel_print_current_calls(void);
 
@@ -223,7 +223,7 @@ const char *rt_host_fn_name(uint64_t pc, uint64_t *offset) {
         else hi = mid;
     }
     if (!lo || pc - byhost[lo - 1][0] > 0x100000) return NULL;
-    // (con el juego movido —guest_addr.h—, el nombre de siempre: el de la función generada)
+    // (with the game moved (guest_addr.h), the usual name: the generated function's)
     snprintf(name, sizeof name, "f_%llx", (unsigned long long)byhost[lo - 1][1] + GUEST_SHIFT);
     if (offset) *offset = pc - byhost[lo - 1][0];
     return name;
@@ -277,7 +277,7 @@ uint64_t g_watch_lo, g_watch_hi;
 uint64_t g_fault_lr;  // (the platform's handler: the faulting thread's link register, for the watch log)
 static uint64_t watch_page;
 static void *watch_thread(void *a) {
-    plat_thread_name("disp-watch");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("disp-watch");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     (void)a;
     int r = plat_protect(watch_page, PLAT_PAGE, PLAT_PROT_NONE);
     fprintf(stderr, "[watch] page %llx protect -> %d\n", (unsigned long long)watch_page, r);
@@ -345,11 +345,11 @@ void rt_fault_report(const char *what, uint64_t fa, uint64_t pc, uint64_t lr) {
     fprintf(stderr, "\n*** %s accessing %#llx\n    host pc %llx (%s+%llx)\n    host lr %llx (%s)\n", what,
             (unsigned long long)fa, (unsigned long long)pc, ps ? ps : "?", (unsigned long long)po,
             (unsigned long long)lr, ls ? ls : "?");
-    // SMRPG (diagnóstico): LARECOMP_CRASH_HOLD=<s> deja el proceso vivo esos segundos antes del volcado y la salida,
-    // para leer la memoria del juego en el momento del fallo con gdb -p (los demás hilos siguen corriendo).
+    // SMRPG (diagnostics): LARECOMP_CRASH_HOLD=<s> keeps the process alive that many seconds before the dump and the
+    // exit, to read the game's memory at the moment of the crash with gdb -p (the other threads keep running).
     const char *hold = getenv("LARECOMP_CRASH_HOLD");
     if (hold && atoi(hold) > 0) {
-        fprintf(stderr, "[crash] en pausa %d s para gdb\n", atoi(hold));
+        fprintf(stderr, "[crash] paused %d s for gdb\n", atoi(hold));
         fflush(stderr);
         sleep((unsigned)atoi(hold));
     }

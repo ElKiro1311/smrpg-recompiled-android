@@ -8,8 +8,9 @@
 #include "hle.h"
 #include "platform.h"
 
-// Bit 1: contar entradas (el perfilador). Bit 2 (SMRPG): hay hilos con una pausa pedida (kernel.c kernel_pause_point):
-// FN_ENTER ya mira esta variable en cada entrada de función, así que la pausa no cuesta nada mientras no hay ninguna.
+// Bit 1: count entries (the profiler). Bit 2 (SMRPG): there are threads with a pause requested (kernel.c
+// kernel_pause_point): FN_ENTER already checks this variable on every function entry, so the pause costs nothing while
+// there is none.
 volatile int g_fnprof;
 void kernel_pause_point(void);
 
@@ -47,7 +48,7 @@ static void bt_check(uint64_t a, uint64_t lr, uint64_t x0) {
 }
 
 void fnprof_hit(uint64_t a, uint64_t lr, uint64_t x0) {
-    if (g_fnprof & 2) kernel_pause_point();  // (SMRPG: un punto seguro para la pausa cooperativa)
+    if (g_fnprof & 2) kernel_pause_point();  // (SMRPG: a safe point for the cooperative pause)
     if (!(g_fnprof & 1)) return;
     if (bt_n) bt_check(a, lr, x0);
     uint32_t h = (uint32_t)((a >> 2) * 0x9E3779B1u) & (NSLOT - 1);
@@ -65,8 +66,8 @@ static int cmp(const void *x, const void *y) {
     return a < b ? 1 : a > b ? -1 : 0;
 }
 
-// SMRPG: escribe los recuentos acumulados hasta ahora (sin parar el perfilador). Lo llama el volcado de cuelgues
-// (kernel.c): sin fotogramas, fnprof_frame no llega nunca a escribir, y así se ve qué funciones del juego corrieron.
+// SMRPG: writes the counts accumulated so far (without stopping the profiler). Called by the hang dump (kernel.c): with
+// no frames, fnprof_frame never gets to write, and this shows which game functions ran.
 void fnprof_dump(const char *out) {
     if (!(g_fnprof & 1)) return;
     uint64_t (*rows)[2] = malloc(sizeof(uint64_t[2]) * NSLOT);
@@ -79,7 +80,7 @@ void fnprof_dump(const char *out) {
     for (int i = 0; f && i < n; i++) fprintf(f, "%llx %llu\n", (unsigned long long)rows[i][0], (unsigned long long)rows[i][1]);
     if (f) fclose(f);
     free(rows);
-    LOG("[fnprof] %d funciones escritas en %s\n", n, out);
+    LOG("[fnprof] %d functions written to %s\n", n, out);
 }
 
 void fnprof_frame(uint64_t frame) {

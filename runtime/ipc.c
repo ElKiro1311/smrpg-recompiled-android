@@ -166,8 +166,8 @@ int ipc_handle_request(Cpu *c, uint32_t handle) {
         return 0;
     }
     uint8_t *payload = (uint8_t *)aligned;
-    // (SMRPG) cada mensaje, solo con LARECOMP_LOG_IPC=1: eran ~60.000 líneas por minuto (el 99 % del registro, 12 MB por
-    // minuto en la AYN Thor) escritas desde los hilos del juego, y en 18 trozos que otros hilos cortaban
+    // (SMRPG) every message, only with LARECOMP_LOG_IPC=1: it was ~60,000 lines per minute (99% of the log, 12 MB per
+    // minute on the AYN Thor) written from the game's threads, and in 18 pieces that other threads cut into
     static int log_ipc = -1;
     if (log_ipc < 0) log_ipc = getenv("LARECOMP_LOG_IPC") && atoi(getenv("LARECOMP_LOG_IPC")) != 0;
     if (log_ipc) {

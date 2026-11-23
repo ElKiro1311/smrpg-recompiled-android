@@ -1,15 +1,15 @@
-// (SMRPG Android) La plataforma Android: la de Linux (runtime/platform/linux.c: bionic, desde la API 33, tiene lo que
-// usa), más lo que pide una app (android_prepare, que main llama lo primero):
-//   - la carpeta de datos (LARECOMP_DATA_ROOT) es la externa de la app, /sdcard/Android/data/<paquete>/files: ahí van
-//     el juego (extracted/: exefs, romfs y el código del juego, lasgame.so), las partidas y los ajustes; se le puede
-//     copiar el juego por adb o con el explorador de archivos, sin permisos;
-//   - lo que va con el programa (las fuentes, el icono) sale de los assets del APK a la carpeta interna (SMRPG_RES_DIR,
-//     platform/linux.c plat_exe_path);
-//   - el código del juego no se puede cargar desde el almacenamiento externo (se monta sin permiso de ejecución): se
-//     copia a la carpeta interna (con su .id y su .cpu) y se carga de ahí (LARECOMP_GAME_LIB, runtime/gamelib.c);
-//   - <carpeta de datos>/entorno.txt: líneas VARIABLE=valor que se ponen en el entorno (pruebas: LARECOMP_INPUT,
-//     LARECOMP_SHOT_AT...), como en el PC desde la consola;
-//   - el registro es lasrecomp.log, en la carpeta de datos (platform/linux.c); esto de aquí sale por logcat (SMRPG).
+// (SMRPG Android) The Android platform: the Linux one (runtime/platform/linux.c: bionic, since API 33, has what it
+// uses), plus what an app requires (android_prepare, which main calls first):
+//   - the data folder (LARECOMP_DATA_ROOT) is the app's external one, /sdcard/Android/data/<package>/files: the game
+//     (extracted/: exefs, romfs and the game code, lasgame.so), the saves and the settings go there; the game can be
+//     copied to it over adb or with the file manager, without permissions;
+//   - what ships with the program (the fonts, the icon) comes out of the APK's assets into the internal folder
+//     (SMRPG_RES_DIR, platform/linux.c plat_exe_path);
+//   - the game code cannot be loaded from external storage (it is mounted without execute permission): it is copied to
+//     the internal folder (with its .id and its .cpu) and loaded from there (LARECOMP_GAME_LIB, runtime/gamelib.c);
+//   - <data folder>/env.txt: VARIABLE=value lines that are put in the environment (tests: LARECOMP_INPUT,
+//     LARECOMP_SHOT_AT...), as on PC from the console;
+//   - the log is lasrecomp.log, in the data folder (platform/linux.c); what is here goes out through logcat (SMRPG).
 #include "linux.c"
 
 #include <android/log.h>
@@ -23,7 +23,7 @@ static void a_mkdirs(const char *path) {
     mkdir(p, 0755);
 }
 
-// src -> dst si no está ya igual (mismo tamaño y no más vieja); por un .tmp que se renombra
+// src -> dst if it is not already the same (same size and not older); through a .tmp that is renamed
 static bool a_copy_if_changed(const char *src, const char *dst) {
     struct stat s, d;
     if (stat(src, &s)) return false;
@@ -38,14 +38,14 @@ static bool a_copy_if_changed(const char *src, const char *dst) {
     if (out && fclose(out)) ok = false;
     if (ok) ok = rename(tmp, dst) == 0;
     else remove(tmp);
-    if (ok) __android_log_print(ANDROID_LOG_INFO, "SMRPG", "copiado %s -> %s (%lld bytes)", src, dst, (long long)s.st_size);
+    if (ok) __android_log_print(ANDROID_LOG_INFO, "SMRPG", "copied %s -> %s (%lld bytes)", src, dst, (long long)s.st_size);
     return ok;
 }
 
-// Un asset del APK (SDL_IOFromFile lee los assets con rutas relativas) a dst, si no está ya con ese tamaño
+// An APK asset (SDL_IOFromFile reads the assets with relative paths) to dst, if it is not already there with that size
 static void a_asset(const char *name, const char *dst) {
     SDL_IOStream *in = SDL_IOFromFile(name, "rb");
-    if (!in) { __android_log_print(ANDROID_LOG_WARN, "SMRPG", "falta el asset %s", name); return; }
+    if (!in) { __android_log_print(ANDROID_LOG_WARN, "SMRPG", "missing asset %s", name); return; }
     Sint64 size = SDL_GetIOSize(in);
     struct stat d;
     if (!stat(dst, &d) && d.st_size == size) { SDL_CloseIO(in); return; }
@@ -58,26 +58,30 @@ static void a_asset(const char *name, const char *dst) {
 
 void android_prepare(void) {
     const char *in = SDL_GetAndroidInternalStoragePath(), *ex = SDL_GetAndroidExternalStoragePath();
-    if (!in || !ex) { __android_log_print(ANDROID_LOG_ERROR, "SMRPG", "sin carpetas de la app: %s", SDL_GetError()); return; }
+    if (!in || !ex) { __android_log_print(ANDROID_LOG_ERROR, "SMRPG", "no app folders: %s", SDL_GetError()); return; }
     char path[1024], res[1024];
-    // solo en horizontal: la ventana del programa es redimensionable, y para SDL eso es «cualquier orientación» (el
-    // juego quedaba en vertical, con aspecto 0,56)
+    // landscape only: the program's window is resizable, and for SDL that is "any orientation" (the game ended up in
+    // portrait, with aspect 0.56)
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     a_mkdirs(ex);
     setenv("LARECOMP_DATA_ROOT", ex, 1);
-    // entorno.txt (pruebas)
-    snprintf(path, sizeof path, "%s/entorno.txt", ex);
+    // env.txt (tests; entorno.txt, its name up to 0.9.1)
+    snprintf(path, sizeof path, "%s/env.txt", ex);
     FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(path, sizeof path, "%s/entorno.txt", ex);
+        f = fopen(path, "r");
+    }
     for (char line[4096]; f && fgets(line, sizeof line, f);) {
         line[strcspn(line, "\r\n")] = 0;
         char *eq = strchr(line, '=');
         if (line[0] == '#' || !eq) continue;
         *eq = 0;
         setenv(line, eq + 1, 1);
-        __android_log_print(ANDROID_LOG_INFO, "SMRPG", "entorno: %s=%s", line, eq + 1);
+        __android_log_print(ANDROID_LOG_INFO, "SMRPG", "environment: %s=%s", line, eq + 1);
     }
     if (f) fclose(f);
-    // lo que va con el programa
+    // what ships with the program
     snprintf(res, sizeof res, "%s/res", in);
     a_mkdirs(res);
     static const char *const assets[] = {"Baloo2-SemiBold.ttf", "BIZUDPGothic-Regular.ttf", "DejaVuSans.ttf",
@@ -87,9 +91,11 @@ void android_prepare(void) {
         a_asset(assets[i], path);
     }
     setenv("SMRPG_RES_DIR", res, 1);
-    // el código del juego, a la carpeta interna
+    // the game code, to the internal folder
     char lib[1024], src[1024];
-    snprintf(lib, sizeof lib, "%s/juego", in);
+    snprintf(lib, sizeof lib, "%s/game", in);
+    snprintf(src, sizeof src, "%s/juego", in);  // (its name up to 0.9.1: the copy that is there is kept)
+    rename(src, lib);
     a_mkdirs(lib);
     static const char *const parts[] = {"lasgame.so", "lasgame.so.id", "lasgame.so.cpu"};
     bool have = true;
@@ -98,15 +104,15 @@ void android_prepare(void) {
         snprintf(path, sizeof path, "%s/%s", lib, parts[i]);
         if (!a_copy_if_changed(src, path)) {
             if (i < 2) have = false;
-            else remove(path);  // (sin .cpu fuera —el de arm64 no lo lleva—, tampoco dentro: uno viejo de x86_64 lo rechazaría)
+            else remove(path);  // (no .cpu outside (arm64's has none): none inside either, an old x86_64 one would reject it)
         }
     }
     snprintf(path, sizeof path, "%s/lasgame.so", lib);
     if (have) setenv("LARECOMP_GAME_LIB", path, 1);
-    // las capturas de las pruebas (LARECOMP_SHOT_AT) van a build/frames de la carpeta de datos
+    // the test screenshots (LARECOMP_SHOT_AT) go to build/frames in the data folder
     snprintf(path, sizeof path, "%s/build/frames", ex);
     a_mkdirs(path);
-    // (el registro del programa lo abre plat_init en la carpeta de datos, lasrecomp.log: stderr no es una terminal)
-    __android_log_print(ANDROID_LOG_INFO, "SMRPG", "datos: %s; recursos: %s; código del juego: %s", ex, res,
-                        have ? path : "(no está: extracted/lasgame.so)");
+    // (the program's log is opened by plat_init in the data folder, lasrecomp.log: stderr is not a terminal)
+    __android_log_print(ANDROID_LOG_INFO, "SMRPG", "data: %s; resources: %s; game code: %s", ex, res,
+                        have ? lib : "(not there: extracted/lasgame.so)");
 }

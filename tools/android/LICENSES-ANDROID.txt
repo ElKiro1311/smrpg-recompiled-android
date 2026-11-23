@@ -1,0 +1,36 @@
+SMRPG Recomp for Android: what goes inside the APK, and its licenses
+==============================================================================
+
+None of this belongs to the game: the code and data of Super Mario RPG come from your own copy. A fan project, not
+affiliated with Nintendo or Square Enix; Super Mario RPG is a trademark of Nintendo.
+
+The port
+  libmain.so: based on LAS Recomp (MIT license, LAS-Recomp-LICENSE.txt). Inside there are also Dear ImGui (MIT,
+  DearImGui-LICENSE.txt), SMAA (MIT, SMAA-LICENSE.txt) and the shaders of Qualcomm's Snapdragon Game Super Resolution
+  (3-clause BSD, Snapdragon-GSR-LICENSE.txt; https://github.com/SnapdragonStudios/snapdragon-gsr), AMD's Vulkan Memory
+  Allocator (MIT, VMA-LICENSE.txt), the audio ported from Ryujinx's (MIT, Ryujinx-LICENSE.txt) and AMD FSR 1 ported to
+  GLSL (MIT: ffx_fsr1.h in AMD-FSR-SDK-LICENSE.md).
+
+Libraries (built from their sources with tools/android/deps.sh)
+  SDL3 3.4.20 (zlib license) ......................... SDL3-LICENSE.txt
+  FFmpeg 9.0.2: avcodec, avformat, avutil, swscale .. LGPL 2.1 or later: FFmpeg-LGPLv2.1.txt. Built without anything GPL,
+                                                      with only the decoders the movies use. Source code:
+                                                      https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz (also attached to
+                                                      the release); its configuration is in the port's
+                                                      tools/android/deps.sh.
+  Opus 1.6.1 (3-clause BSD) .......................... Opus-COPYING.txt
+  shaderc 2026.4, with glslang 16.6.0 and SPIRV-Tools
+  (Apache 2.0 / BSD) ................................. shaderc-LICENSE.txt, glslang-LICENSE.txt, SPIRV-Tools-LICENSE.txt
+  libc++ from the Android NDK (Apache 2.0 with the
+  LLVM exceptions) ................................... LLVM-libcxx-NOTICE.txt
+
+Lossless Scaling frame generation (liblsfg.so, built from its sources with tools/lsfg/build.sh)
+  lsfg-vk (GameNative's Android branch, MIT) ......... lsfg-vk-LICENSE.txt
+  (https://github.com/GameNative/lsfg-vk-android), with DXVK's DXBC translator (zlib, DXVK-dxbc-LICENSE.txt), pe-parse
+  (MIT, pe-parse-LICENSE.txt) and volk (MIT, volk-LICENSE.txt).
+  LSFG's shaders are not here: they come from the Lossless.dll of your copy of Lossless Scaling (a paid program on Steam),
+  which you copy to the game's data folder.
+
+Fonts
+  Baloo 2 and BIZ UDPGothic (SIL Open Font License) .. Baloo2-OFL.txt, BIZUDPGothic-OFL.txt
+  DejaVu Sans (Bitstream Vera / DejaVu license) ...... DejaVu-LICENSE.txt

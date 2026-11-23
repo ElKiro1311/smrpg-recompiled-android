@@ -1,16 +1,16 @@
-// (SMRPG) Paquetes de texturas: volcar las texturas del juego a PNG y sustituirlas por otras, normalmente más grandes
-// (texturas HD), desde una carpeta. Ajustes: Menú > Vídeo > Imagen > «Texturas HD» y «Volcar texturas».
+// (SMRPG) Texture packs: dumping the game's textures to PNG and replacing them with others, usually larger (HD
+// textures), from a folder. Settings: Menu > Video > Image > "HD textures" and "Dump textures".
 //
-// - Huella de una textura: texpack_key, 64 bits, sobre los datos del nivel 0 tal como el juego los da (bloques ASTC,
-//   o los texels RGBA8) con su ancho, alto y formato de NVN. No depende de dónde esté la textura en memoria ni de
-//   cómo llegue (desde la CPU o con una copia de la GPU). Escrita en hexadecimal (16 cifras) da el nombre del archivo.
-// - Volcado: <datos>/texturas-volcadas/<huella>_<ancho>x<alto>_<formato>.png, una vez por textura (RGBA, el color tal
-//   como lo guarda el juego: sRGB en las de color).
-// - Sustitución: cualquier PNG de <datos>/texturas o sus subcarpetas cuyo nombre empiece por la huella (lo que siga
-//   da igual: «<huella>.png», «<huella>_1024x1024_astc6x6srgb_x4.png», ...). Debe tener las proporciones de la
-//   original y al menos su tamaño; los mipmaps se generan. El juego sigue viendo el tamaño original (consultas de
-//   tamaño y lecturas por texel van por la escala de la textura, como las de las texturas a otra resolución).
-// La sustitución y el volcado los hace vulkan/textures.c (upload_texture) y exec.c (copy_buffer_to_texture).
+// - Texture hash: texpack_key, 64 bits, over the level 0 data as the game provides it (ASTC blocks, or the RGBA8
+//   texels) with its width, height and NVN format. It doesn't depend on where the texture is in memory or how it gets
+//   there (from the CPU or with a GPU copy). Written in hexadecimal (16 digits) it gives the file name.
+// - Dump: <data>/textures-dump/<hash>_<width>x<height>_<format>.png, once per texture (RGBA, the color as the game
+//   stores it: sRGB for color textures).
+// - Replacement: any PNG in <data>/textures or its subfolders whose name starts with the hash (what follows doesn't
+//   matter: "<hash>.png", "<hash>_1024x1024_astc6x6srgb_x4.png", ...). It must have the original's proportions and at
+//   least its size; mipmaps are generated. The game still sees the original size (size queries and texel fetches go
+//   through the texture's scale, like those of textures at another resolution).
+// Replacing and dumping are done by vulkan/textures.c (upload_texture) and exec.c (copy_buffer_to_texture).
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -55,7 +55,7 @@ uint64_t texpack_key(const uint8_t *data, uint32_t row_bytes, uint32_t nrows, ui
     return fmix64(k);
 }
 
-// ---------------------------------------------------------------- el índice de <datos>/texturas
+// ---------------------------------------------------------------- the index of <data>/textures
 typedef struct { uint64_t key; char *path; } Entry;
 static Entry *g_tab;
 static uint32_t g_cap, g_n;
@@ -76,7 +76,7 @@ static void tab_put(uint64_t key, const char *path) {
     }
     for (uint32_t j = (uint32_t)fmix64(key) & (g_cap - 1);; j = (j + 1) & (g_cap - 1)) {
         if (!g_tab[j].path) { g_tab[j].key = key; g_tab[j].path = SDL_strdup(path); g_n++; return; }
-        if (g_tab[j].key == key) return;  // (dos archivos con la misma huella: vale el primero)
+        if (g_tab[j].key == key) return;  // (two files with the same hash: the first one wins)
     }
 }
 
@@ -87,7 +87,7 @@ static bool hex16(const char *s, uint64_t *out) {
         if (d < 0) return false;
         v = v << 4 | (uint64_t)d;
     }
-    if (isxdigit((unsigned char)s[16])) return false;  // (más de 16 cifras: no es una huella)
+    if (isxdigit((unsigned char)s[16])) return false;  // (more than 16 digits: not a hash)
     *out = v;
     return true;
 }
@@ -114,25 +114,37 @@ static SDL_EnumerationResult scan_cb(void *ud, const char *dir, const char *name
     return SDL_ENUM_CONTINUE;
 }
 
+// A folder of the data folder; the Spanish name earlier versions gave it, if only that one is there.
+static void data_dir(char *out, size_t cap, const char *name, const char *old) {
+    const char *root = rt_data_root();
+    if (!root || !*root) root = ".";
+    SDL_PathInfo pi;
+    char o[1024];
+    snprintf(out, cap, "%s/%s", root, name);
+    snprintf(o, sizeof o, "%s/%s", root, old);
+    if (!SDL_GetPathInfo(out, &pi) && SDL_GetPathInfo(o, &pi) && pi.type == SDL_PATHTYPE_DIRECTORY) snprintf(out, cap, "%s", o);
+}
+
 static void scan(void) {
     if (g_scanned) return;
     g_scanned = true;
     const char *root = rt_data_root();
     if (!root || !*root) return;
     char dir[1024];
-    snprintf(dir, sizeof dir, "%s/texturas/", root);
+    data_dir(dir, sizeof dir - 1, "textures", "texturas");
+    strcat(dir, "/");
     SDL_PathInfo pi;
     if (!SDL_GetPathInfo(dir, &pi) || pi.type != SDL_PATHTYPE_DIRECTORY) {
-        LOG("[texturas] sin carpeta de texturas HD (%s)\n", dir);
+        LOG("[textures] no HD texture folder (%s)\n", dir);
         return;
     }
     int depth = 0;
     uint64_t t0 = SDL_GetTicks();
     SDL_EnumerateDirectory(dir, scan_cb, &depth);
-    LOG("[texturas] %u texturas HD en %s (%llu ms)\n", g_n, dir, (unsigned long long)(SDL_GetTicks() - t0));
+    LOG("[textures] %u HD textures in %s (%llu ms)\n", g_n, dir, (unsigned long long)(SDL_GetTicks() - t0));
 }
 
-// La ruta del PNG que sustituye a la textura de esa huella, o NULL.
+// The path of the PNG that replaces the texture with that hash, or NULL.
 const char *texpack_lookup(uint64_t key) {
     if (!settings_tex_pack()) return NULL;
     if (!g_lock) g_lock = SDL_CreateMutex();
@@ -146,7 +158,7 @@ const char *texpack_lookup(uint64_t key) {
     return r;
 }
 
-// ¿Hay que calcular la huella de las texturas que se cargan? Con el volcado, o con texturas HD en la carpeta.
+// Do textures need hashing as they are loaded? With dumping on, or with HD textures in the folder.
 bool texpack_active(void) {
     if (settings_tex_dump()) return true;
     if (!settings_tex_pack()) return false;
@@ -158,11 +170,11 @@ bool texpack_active(void) {
     return any;
 }
 
-// El PNG en RGBA8 (filas seguidas), o NULL.
+// The PNG as RGBA8 (tightly packed rows), or NULL.
 uint8_t *texpack_load(const char *path, uint32_t *w, uint32_t *h) {
     SDL_Surface *s = SDL_LoadPNG(path);
-    if (!s) { LOG("[texturas] no se puede leer %s: %s\n", path, SDL_GetError()); return NULL; }
-    SDL_Surface *c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ABGR8888);  // (en memoria: R, G, B, A)
+    if (!s) { LOG("[textures] cannot read %s: %s\n", path, SDL_GetError()); return NULL; }
+    SDL_Surface *c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ABGR8888);  // (in memory: R, G, B, A)
     SDL_DestroySurface(s);
     if (!c) return NULL;
     uint8_t *px = malloc((size_t)c->w * c->h * 4);
@@ -174,7 +186,7 @@ uint8_t *texpack_load(const char *path, uint32_t *w, uint32_t *h) {
     return px;
 }
 
-// ---------------------------------------------------------------- volcado
+// ---------------------------------------------------------------- dumping
 static uint64_t *g_dumped;
 static uint32_t g_dcap, g_dn;
 
@@ -194,7 +206,7 @@ static const char *fmt_name(uint32_t f) {
     }
 }
 
-// Guarda el nivel 0 de una textura (RGBA8, filas seguidas) si el volcado está activado y no se guardó ya.
+// Saves level 0 of a texture (RGBA8, tightly packed rows) if dumping is on and it wasn't saved already.
 void texpack_dump_rgba(uint64_t key, const uint8_t *rgba, uint32_t w, uint32_t h, uint32_t fmt) {
     if (!settings_tex_dump() || !rgba || w < 4 || h < 4) return;
     if (!g_lock) g_lock = SDL_CreateMutex();
@@ -218,12 +230,11 @@ void texpack_dump_rgba(uint64_t key, const uint8_t *rgba, uint32_t w, uint32_t h
     }
     SDL_UnlockMutex(g_lock);
     if (seen) return;
-    const char *root = rt_data_root();
     char dir[1024], path[1200];
-    snprintf(dir, sizeof dir, "%s/texturas-volcadas", root ? root : ".");
+    data_dir(dir, sizeof dir, "textures-dump", "texturas-volcadas");
     SDL_CreateDirectory(dir);
     snprintf(path, sizeof path, "%s/%016llx_%ux%u_%s.png", dir, (unsigned long long)key, w, h, fmt_name(fmt));
     SDL_PathInfo pi;
-    if (SDL_GetPathInfo(path, &pi)) return;  // (de otra sesión)
+    if (SDL_GetPathInfo(path, &pi)) return;  // (from another session)
     vk_save_png(path, rgba, w, h);
 }

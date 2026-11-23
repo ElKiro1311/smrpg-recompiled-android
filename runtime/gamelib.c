@@ -35,9 +35,10 @@ static bool exists(const char *p) {
     return f != NULL;
 }
 
-// (SMRPG) ¿Corre esta CPU el código de la biblioteca? <library>.cpu dice para qué CPU se compiló (el instalador,
-// tools/instalador/construir.cpp: x86-64-v3 con AVX2, FMA y BMI2 si la CPU los tiene, si no x86-64-v2 o x86-64); sin
-// él (`make`), x86-64-v3. Una biblioteca para otra CPU (la carpeta llevada a otro PC) no se carga: se vuelve a construir.
+// (SMRPG) Can this CPU run the library's code? <library>.cpu says which CPU it was compiled for (the installer,
+// tools/installer/game_builder.cpp: x86-64-v3 with AVX2, FMA and BMI2 if the CPU has them, otherwise x86-64-v2 or
+// x86-64); without it (`make`), x86-64-v3. A library for another CPU (the folder taken to another PC) is not loaded: it
+// is built again.
 static bool cpu_runs(const char *lib) {
     char path[1100], lv[32] = "x86-64-v3";
     snprintf(path, sizeof path, "%s.cpu", lib);
@@ -53,7 +54,7 @@ static bool cpu_runs(const char *lib) {
     if (!strcmp(lv, "x86-64-v3"))
         return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2");
     if (!strcmp(lv, "x86-64-v2")) return __builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt");
-    return !strcmp(lv, "x86-64");  // (otra etiqueta, o el archivo dañado: no se sabe qué pide, no se carga)
+    return !strcmp(lv, "x86-64");  // (another tag, or a damaged file: what it needs is unknown, so it is not loaded)
 #else
     return true;
 #endif
@@ -122,7 +123,7 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
                 snprintf(g_error, sizeof g_error, "%s was built for another version", c[i]);
                 continue;
             }
-            if (!cpu_runs(c[i])) {  // (SMRPG: compilada para una CPU con más instrucciones que esta)
+            if (!cpu_runs(c[i])) {  // (SMRPG: compiled for a CPU with more instructions than this one)
                 snprintf(g_error, sizeof g_error, "%s was built for another CPU (run the installer on this PC)", c[i]);
                 continue;
             }

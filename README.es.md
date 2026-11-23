@@ -23,8 +23,8 @@ combates, guardar y cargar, en todo lo probado. Pide **Android 13 o más nuevo, 
 en otras GPU no está probado.
 
 Qué tiene: resolución interna desde 720p, escalado con Snapdragon GSR 1 y GSR 2 y con AMD FSR 1, generación de
-fotogramas de Lossless Scaling (con **tu** copia), texturas HD, botones a tu gusto, pausa en segundo plano y menús en español
-(la versión en inglés está en camino). Lo que cambia en cada versión: [`VERSIONES-ANDROID.txt`](VERSIONES-ANDROID.txt).
+fotogramas de Lossless Scaling (con **tu** copia), texturas HD, botones a tu gusto, pausa en segundo plano y menús en inglés y en
+español. Lo que cambia en cada versión, en inglés: [`CHANGELOG-ANDROID.txt`](CHANGELOG-ANDROID.txt).
 
 ## Instalar
 
@@ -36,7 +36,8 @@ fotogramas de Lossless Scaling (con **tu** copia), texturas HD, botones a tu gus
 3. Copia al aparato tu juego extraído y ese código, de modo que
    `Android/data/org.smrpgrecomp.android/files/extracted/` tenga `exefs/`, `romfs/`, `lasgame.so` y `lasgame.so.id`.
 
-El menú de ajustes se abre con el botón Atrás (o con Home en un mando). La generación de fotogramas usa el
+El menú de ajustes se abre con el botón Atrás (o con Home en un mando), y sale en español si el idioma del juego es el
+español (Vídeo > Idioma del juego). La generación de fotogramas usa el
 `Lossless.dll` de tu copia de Lossless Scaling (de pago, en Steam), que copias a
 `Android/data/org.smrpgrecomp.android/files/`: ni el repositorio ni el APK lo llevan ni lo descargan.
 
@@ -44,7 +45,7 @@ El menú de ajustes se abre con el botón Atrás (o con Home en un mando). La ge
 
 En Windows, con MSYS2 UCRT64. Hace falta el SDK de Android con `ndk;29.0.14206865`, `build-tools;36.0.0`,
 `platforms;android-36` y `cmake;4.1.2`, y un JDK 17 o más nuevo, con sus rutas en un `local.env`, que git no sube (ver
-[`local.env.ejemplo`](local.env.ejemplo)). Con tu juego extraído en `extracted/`:
+[`local.env.example`](local.env.example)). Con tu juego extraído en `extracted/`:
 
 1. `tools/android/deps.sh arm64-v8a`: SDL3, FFmpeg (LGPL), Opus y shaderc, en `../deps/arm64-v8a`;
 2. `make gen PLATFORM=android ABI=arm64-v8a` y `make -j8 PLATFORM=android ABI=arm64-v8a`: `libmain.so` y el código del
@@ -64,6 +65,6 @@ En las [issues de este repositorio](https://github.com/ElKiro1311/smrpg-recompil
 - [Snapdragon GSR](https://github.com/SnapdragonStudios/snapdragon-gsr) de Qualcomm, AMD FSR 1,
   [lsfg-vk-android](https://github.com/GameNative/lsfg-vk-android) (la generación de Lossless Scaling), Vulkan Memory
   Allocator, Dear ImGui, SMAA, SDL3, FFmpeg (LGPL), Opus, shaderc y otros, cada uno con su licencia, en `third_party/` y
-  dentro del APK (`assets/licencias`).
+  dentro del APK (`assets/licenses`).
 - El código de LASRecomp y el de este port van con la licencia MIT de [`LICENSE`](LICENSE). Esa licencia no cubre
   Super Mario RPG ni nada de Nintendo, ni lo de `third_party/`, que conserva su propia licencia.

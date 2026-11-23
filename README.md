@@ -23,8 +23,8 @@ battles, saving and loading, in everything tested so far. It needs **Android 13 
 Vulkan 1.3**; other GPUs are untested.
 
 What it has: internal resolutions from 720p up, Snapdragon GSR 1 and GSR 2 and AMD FSR 1 upscaling, Lossless Scaling
-frame generation (with **your** copy of it), HD textures, button remapping, background pause and menus in Spanish (the
-English version is on its way). What changed in each version: [`VERSIONES-ANDROID.txt`](VERSIONES-ANDROID.txt).
+frame generation (with **your** copy of it), HD textures, button remapping, background pause, and menus in English and
+Spanish. What changed in each version: [`CHANGELOG-ANDROID.txt`](CHANGELOG-ANDROID.txt).
 
 ## Installing
 
@@ -44,7 +44,7 @@ The settings menu opens with the Back button (or the Home button on a controller
 
 On Windows, with MSYS2 UCRT64. You need the Android SDK with `ndk;29.0.14206865`, `build-tools;36.0.0`,
 `platforms;android-36` and `cmake;4.1.2`, plus JDK 17 or newer. Their paths go in a `local.env` file, which git ignores
-(see [`local.env.ejemplo`](local.env.ejemplo)). With your extracted game in `extracted/`:
+(see [`local.env.example`](local.env.example)). With your extracted game in `extracted/`:
 
 1. `tools/android/deps.sh arm64-v8a` builds SDL3, FFmpeg (LGPL), Opus and shaderc in `../deps/arm64-v8a`;
 2. `make gen PLATFORM=android ABI=arm64-v8a` and `make -j8 PLATFORM=android ABI=arm64-v8a` build `libmain.so` and the
@@ -64,6 +64,6 @@ game's data folder. Please don't report them to LASRecomp: this port isn't their
 - [Snapdragon GSR](https://github.com/SnapdragonStudios/snapdragon-gsr) by Qualcomm, AMD FSR 1,
   [lsfg-vk-android](https://github.com/GameNative/lsfg-vk-android) (Lossless Scaling frame generation), Vulkan Memory
   Allocator, Dear ImGui, SMAA, SDL3, FFmpeg (LGPL), Opus, shaderc and others, each with its own license in
-  `third_party/` and inside the APK (`assets/licencias`).
+  `third_party/` and inside the APK (`assets/licenses`).
 - The code of LASRecomp and of this port is under the MIT license in [`LICENSE`](LICENSE). That license does not cover
   Super Mario RPG or anything else of Nintendo's, nor what is in `third_party/`, which keeps its own license.

@@ -26,11 +26,11 @@ uint64_t maxwell_gmem_base, maxwell_gmem_size;
 uint32_t maxwell_gmem_chunk_shift;  // 0: one buffer for the whole heap (GLSL; shader.h)
 bool maxwell_gmem_lazy;
 bool maxwell_gmem_fs_miss;
-// (SMRPG Android) La GPU no tiene enteros de 64 bits en los sombreadores (shaderInt64: las Adreno de Qualcomm): las
-// sumas con acarreo, los desplazamientos de dos registros y las direcciones de LDG / STG se escriben con palabras de
-// 32 bits (uaddCarry, usubBorrow, shr64lo / sar64lo / shl64hi) y el GLSL no declara la extensión de 64 bits. Con
-// enteros de 64 bits declarados sin que la GPU los tenga, la Adreno daba basura: la lava plana, las burbujas verdes.
-// vulkan/device.c lo decide (LARECOMP_VK_NO_INT64=1 lo fuerza, para comprobarlo en otra GPU).
+// (SMRPG Android) The GPU has no 64-bit integers in shaders (shaderInt64: Qualcomm's Adrenos): additions with carry,
+// two-register shifts and LDG / STG addresses are written with 32-bit words (uaddCarry, usubBorrow, shr64lo / sar64lo /
+// shl64hi) and the GLSL doesn't declare the 64-bit extension. With 64-bit integers declared and the GPU not having
+// them, the Adreno gave garbage: flat lava, green bubbles. vulkan/device.c decides (LARECOMP_VK_NO_INT64=1 forces it,
+// to check it on another GPU).
 bool maxwell_no_int64;
 const uint8_t *maxwell_dbg_code;
 uint32_t maxwell_dbg_pc;
@@ -125,22 +125,22 @@ typedef struct {
     bool glsl;               // emit Vulkan GLSL: dialect-specific constructs here, the rest via glsl_rewrite()
     bool uses_gmem_store;    // STG present: the gmem buffer is not readonly
     uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)
-    uint32_t cur_pc;         // (SMRPG) pc de la instrucción que se traduce (TEX.B rastrea su manejador hacia atrás)
-    uint8_t tb_upred;        // (SMRPG) predicado (bits 16-19) de la instrucción que usa el registro que se rastrea
-    int lmem_words;          // (SMRPG Android) palabras de memoria local (LDL / STL): las que pide la SPH (maxwell_translate)
+    uint32_t cur_pc;         // (SMRPG) pc of the instruction being translated (TEX.B traces its handle backwards)
+    uint8_t tb_upred;        // (SMRPG) predicate (bits 16-19) of the instruction that uses the register being traced
+    int lmem_words;          // (SMRPG Android) local memory words (LDL / STL): what the SPH asks for (maxwell_translate)
 } Ctx;
 
-// (SMRPG Android) LARECOMP_VK_VS_NOFMA=1 (prueba): en los sombreadores de vértices GLSL, FFMA como «a * b + c» en vez de
-// fma(): el producto y la suma por separado (con NoContraction, vulkan/shaders.c), por si el controlador no respeta
-// NoContraction en Fma y fusiona distinto en la pasada previa de profundidad y en la de color (EQUAL: huecos)
+// (SMRPG Android) LARECOMP_VK_VS_NOFMA=1 (test): in GLSL vertex shaders, FFMA as "a * b + c" instead of fma(): the
+// product and the sum separately (with NoContraction, vulkan/shaders.c), in case the driver doesn't honor NoContraction
+// on Fma and fuses differently in the depth prepass and in the color pass (EQUAL: holes)
 static bool vs_split_fma(const Ctx *c) {
     static int on = -1;
     if (on < 0) on = getenv("LARECOMP_VK_VS_NOFMA") && atoi(getenv("LARECOMP_VK_VS_NOFMA")) != 0;
     return on && c->glsl && c->stage == STAGE_VERTEX;
 }
-// (SMRPG Android) LARECOMP_VK_DISCARD_FRAGDEPTH=1 (prueba): los sombreadores de fragmentos con descarte escriben
-// gl_FragDepth = gl_FragCoord.z: la profundidad deja de poder probarse ni escribirse antes del sombreador (Z temprana,
-// LRZ de la Adreno) en los dibujos con recorte alfa
+// (SMRPG Android) LARECOMP_VK_DISCARD_FRAGDEPTH=1 (test): fragment shaders with discard write gl_FragDepth =
+// gl_FragCoord.z: depth can no longer be tested or written before the shader (early Z, the Adreno's LRZ) in
+// alpha-clipped draws
 static bool discard_fragdepth(void) {
     static int on = -1;
     if (on < 0) on = getenv("LARECOMP_VK_DISCARD_FRAGDEPTH") && atoi(getenv("LARECOMP_VK_DISCARD_FRAGDEPTH")) != 0;
@@ -486,12 +486,12 @@ static bool emit_half(Ctx *c, uint64_t w) {
         hstore(c, d, t, merge, sat);
         return true;
     }
-    // ---- HSETP2 / HSET2 (reg 5d20 / 5d18; SMRPG: también cbuf 7e8x / 7c8x e inmediato 7e0x / 7c0x)
-    // En las formas cbuf e inmediata los campos se mueven (yuzu hsetp2.cpp / hset2.cpp, Ryujinx InstHsetp2C/I): la
-    // comparación a 49-52 y H_AND / BF a 53; B es un fp32 del cbuf (swizzle F32, neg 56, abs 54) o dos mitades
-    // inmediatas como en HADD2.
-    // (patrones de Ryujinx InstTable: HSETP2 0111111x0 / 0111111x1, HSET2 0111110x0 / 0111110x1; el bit x, 56, es NegB
-    // o la mitad alta del inmediato)
+    // ---- HSETP2 / HSET2 (reg 5d20 / 5d18; SMRPG: also cbuf 7e8x / 7c8x and immediate 7e0x / 7c0x)
+    // In the cbuf and immediate forms the fields move (yuzu hsetp2.cpp / hset2.cpp, Ryujinx InstHsetp2C/I): the
+    // comparison to 49-52 and H_AND / BF to 53; B is an fp32 from the cbuf (swizzle F32, neg 56, abs 54) or two
+    // immediate halves as in HADD2.
+    // (patterns from Ryujinx InstTable: HSETP2 0111111x0 / 0111111x1, HSET2 0111110x0 / 0111110x1; bit x, 56, is NegB
+    // or the high half of the immediate)
     int hform = (op & 0xfff8) == 0x5d20 || (op & 0xfff8) == 0x5d18 ? 0
               : (op & 0xfe80) == 0x7e80 || (op & 0xfe80) == 0x7c80 ? 1
               : (op & 0xfe80) == 0x7e00 || (op & 0xfe80) == 0x7c00 ? 2 : -1;
@@ -503,7 +503,7 @@ static bool emit_half(Ctx *c, uint64_t w) {
         if (hform == 0) {
             y = HS(R((int)bits(w, 20, 8)), (int)bits(w, 28, 2), bits(w, 31, 1), bits(w, 30, 1));
             cop = (int)bits(w, 35, 4);
-        } else if (hform == 1) {  // (en HSET2 el bit 54 es FTZ, no AbsB)
+        } else if (hform == 1) {  // (in HSET2, bit 54 is FTZ, not AbsB)
             y = HS(cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb), 1, bits(w, 56, 1), setp && bits(w, 54, 1));
             cop = (int)bits(w, 49, 4);
         } else {
@@ -858,12 +858,12 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
 }
 
 // ------------------------------------------------------------------ TEX.B (SMRPG)
-// En la Switch, el manejador de un TEX.B (bindless) sale de las tablas del driver en c[2]: una palabra de textura
-// combinada (BindTexture, 0x20 + 8r) o una de textura separada (BindSeparateTexture, 0x168 + 8r) unida con OR (o
-// sumada) a una de sampler separado (BindSeparateSampler, 0x568 + 8r), en cualquier orden. Unity usa las separadas.
-// Se busca hacia atrás, sin salir del bloque, la instrucción que escribió el registro (lo que hace la «bindless
-// elimination» de Ryujinx sobre su IR, aquí sobre el código) y se sigue a través de MOV, OR y sumas.
-static bool tex_b_no_gpr_dest(uint64_t w) {  // no escriben un registro general en los bits 0-7
+// On the Switch, the handle of a TEX.B (bindless) comes from the driver's tables in c[2]: a combined texture word
+// (BindTexture, 0x20 + 8r), or a separate texture word (BindSeparateTexture, 0x168 + 8r) ORed with (or added to) a
+// separate sampler word (BindSeparateSampler, 0x568 + 8r), in any order. Unity uses the separate ones. The search goes
+// backwards, without leaving the block, for the instruction that wrote the register (what Ryujinx's "bindless
+// elimination" does on its IR, here on the code) and follows it through MOV, OR and additions.
+static bool tex_b_no_gpr_dest(uint64_t w) {  // instructions that don't write a general register in bits 0-7
     uint64_t t12 = w & 0xfff0000000000000ull, t13 = w & 0xfff8000000000000ull;
     if (t12 == 0x5bb0000000000000ull || t12 == 0x4bb0000000000000ull || (w & 0xfef0000000000000ull) == 0x36b0000000000000ull)
         return true;  // FSETP
@@ -876,8 +876,8 @@ static bool tex_b_no_gpr_dest(uint64_t w) {  // no escriben un registro general 
         return true;  // STG, STL, STS, ST a[]
     if (t13 == 0xf0f0000000000000ull || t13 == 0x50b0000000000000ull || t13 == 0xef98000000000000ull || t13 == 0xf0a8000000000000ull)
         return true;  // DEPBAR, NOP, MEMBAR, BAR
-    // (SMRPG, barrido de shaders) más instrucciones que solo escriben predicados o memoria: sus bits 0-7 no son un
-    // registro (el HSETP2 de 0x7e86... con el predicado de destino en esos bits pasaba por un escritor de r15)
+    // (SMRPG, shader sweep) more instructions that only write predicates or memory: their bits 0-7 aren't a register
+    // (the 0x7e86... HSETP2, with the destination predicate in those bits, was taken for a writer of r15)
     if (t12 == 0x5b80000000000000ull || t12 == 0x4b80000000000000ull || (w & 0xfef0000000000000ull) == 0x3680000000000000ull)
         return true;  // DSETP
     if (t13 == 0x5d20000000000000ull || (w & 0xfe00000000000000ull) == 0x7e00000000000000ull) return true;  // HSETP2
@@ -890,8 +890,8 @@ static bool tex_b_no_gpr_dest(uint64_t w) {  // no escriben un registro general 
     if (t13 == 0xf0c0000000000000ull) return true;                                                         // R2B
     return false;
 }
-// (SMRPG) ¿escribe x el predicado p? (las comparaciones con sus dos destinos en los bits 3-5 y 0-2, R2P, que puede
-// escribirlos todos, y el predicado de salida de LOP)
+// (SMRPG) does x write predicate p? (comparisons, with their two destinations in bits 3-5 and 0-2; R2P, which can write
+// them all; and LOP's output predicate)
 static bool tex_b_writes_pred(uint64_t x, int p) {
     uint64_t t12 = x & 0xfff0000000000000ull, t13 = x & 0xfff8000000000000ull;
     bool setp = t12 == 0x5bb0000000000000ull || t12 == 0x4bb0000000000000ull || (x & 0xfef0000000000000ull) == 0x36b0000000000000ull ||
@@ -903,42 +903,42 @@ static bool tex_b_writes_pred(uint64_t x, int p) {
     if ((x & 0xfef8000000000000ull) == 0x38f0000000000000ull || t13 == 0x5cf0000000000000ull || t13 == 0x4cf0000000000000ull)
         return true;  // R2P
     if (t13 == 0x5c40000000000000ull || t13 == 0x4c40000000000000ull || (x & 0xfef8000000000000ull) == 0x3840000000000000ull)
-        return (int)bits(x, 48, 3) == p;  // LOP con salida de predicado
+        return (int)bits(x, 48, 3) == p;  // LOP with predicate output
     return false;
 }
-static bool tex_b_block_edge(uint64_t w) {  // flujo de control: el rastreo no lo cruza
+static bool tex_b_block_edge(uint64_t w) {  // control flow: the trace does not cross it
     uint64_t t12 = w & 0xfff0000000000000ull;
     return t12 == 0xe240000000000000ull || t12 == 0xe250000000000000ull || t12 == 0xe290000000000000ull ||
            t12 == 0xe2a0000000000000ull || t12 == 0xe2b0000000000000ull || t12 == 0xe300000000000000ull ||
            t12 == 0xe340000000000000ull || t12 == 0xe350000000000000ull || (w & 0xfff8000000000000ull) == 0xf0f8000000000000ull;
 }
-// Un escritor con predicado no se puede seguir, salvo el OR (o suma) del registro consigo mismo y una palabra de c[2]:
-// el compilador de NVN une a veces el sampler separado solo en un camino (@!P1 LOP.OR r24, r24, c[2][0x568]); unirlo
-// siempre da el mismo manejador o el que sirve (sin él, el sampler sería el 0).
+// A predicated writer can't be followed, except for the OR (or addition) of the register with itself and a c[2] word:
+// the NVN compiler sometimes merges in the separate sampler on only one path (@!P1 LOP.OR r24, r24, c[2][0x568]);
+// always merging it in gives the same handle or the one that works (without it, the sampler would be 0).
 static bool tex_b_pred_ok(Ctx *c, uint64_t w, int reg) {
     if ((int)bits(w, 16, 3) == PT && !bits(w, 19, 1)) return true;
-    if ((uint8_t)bits(w, 16, 4) == c->tb_upred) return true;  // (el mismo predicado que el uso: se ejecutan juntos)
+    if ((uint8_t)bits(w, 16, 4) == c->tb_upred) return true;  // (same predicate as the use: they execute together)
     uint64_t t13 = w & 0xfff8000000000000ull;
     bool self = (int)bits(w, 8, 8) == reg && (int)(w & 0xff) == reg && bits(w, 34, 5) == 2;
     bool lop_or = t13 == 0x4c40000000000000ull && bits(w, 41, 2) == 1 && !bits(w, 39, 1) && !bits(w, 40, 1);
     bool iadd = t13 == 0x4c10000000000000ull && !bits(w, 43, 1) && !bits(w, 47, 1) && !bits(w, 48, 1) && !bits(w, 49, 1);
     return self && (lop_or || iadd);
 }
-// SMRPG: la definición de reg que llega a pc por el grafo de control del programa. Se recorre hacia atrás desde pc
-// por los predecesores, y cada camino para en la primera instrucción que escribe reg. Si todos los caminos llegan a la
-// misma (sin predicado), es esa; si no (varias, una con predicado, un camino desde el principio sin ninguna, o un
-// salto indirecto / llamada), -1. SYNC / BRK / CONT van, por si acaso, a todos los destinos de SSY / PBK / PCNT.
+// SMRPG: the definition of reg that reaches pc through the program's control-flow graph. The graph is walked backwards
+// from pc through the predecessors, and each path stops at the first instruction that writes reg. If all the paths
+// reach the same one (unpredicated), that is it; if not (several, a predicated one, a path from the start with none, or
+// an indirect jump / call), -1. SYNC / BRK / CONT go, just in case, to all the targets of SSY / PBK / PCNT.
 static int64_t tex_b_next(int64_t i) { i++; if (i % 4 == 0) i++; return i; }
-// (SMRPG) Devuelve cuántas definiciones distintas llegan (hasta TB_MAXDEFS, en defs) o -1. Varias valen si al
-// rastrearlas dan las mismas palabras (tex_b_words): el shader de los personajes repite un LOP.OR del sampler en uno
-// de sus dos caminos (0x28 y 0x738 en 751804f880) y a su TEX.B llegan las dos.
+// (SMRPG) Returns how many distinct definitions reach it (up to TB_MAXDEFS, in defs) or -1. Several are fine if tracing
+// them gives the same words (tex_b_words): the characters' shader repeats a LOP.OR of the sampler on one of its two
+// paths (0x28 and 0x738 in 751804f880) and both reach its TEX.B.
 #define TB_MAXDEFS 8
-// (SMRPG, barrido de shaders) Una definición con predicado (@P r = ...) distinto del uso vale si el uso solo se alcanza
-// por el lado «P cierto» de un salto que la sigue: @!P BRA t (o @P BRA t para una definición @!P) con t más allá del
-// uso; entre la definición y ese salto nadie escribe P y el control no sale de esa zona (sus saltos caen dentro: un
-// if/else entre medias vale), y ningún otro salto cae entre ese salto y el uso. Así guarda el compilador de NVN un
-// manejador de textura que solo se lee si el material la usa (@P0 LOP.OR r32, r42, c[2][..] ... @!P0 BRA fuera ...
-// TEX.B r32). Los demás caminos al uso los sigue el rastreo.
+// (SMRPG, shader sweep) A definition with a predicate (@P r = ...) other than the use's is valid if the use is only
+// reached through the "P true" side of a branch that follows it: @!P BRA t (or @P BRA t for a @!P definition) with t
+// beyond the use; between the definition and that branch nothing writes P and control doesn't leave that region (its
+// branches land inside: an if/else in between is fine), and no other branch lands between that branch and the use. This
+// is how the NVN compiler guards a texture handle that is only read if the material uses it (@P0 LOP.OR r32, r42,
+// c[2][..] ... @!P0 BRA out ... TEX.B r32). The trace follows the other paths to the use.
 static bool tex_b_guarded_def(Ctx *c, int64_t q, uint32_t use_pc) {
     const uint64_t *code = (const uint64_t *)c->code;
     uint64_t w = code[q];
@@ -946,7 +946,7 @@ static bool tex_b_guarded_def(Ctx *c, int64_t q, uint32_t use_pc) {
     bool neg = bits(w, 19, 1);
     int64_t u = (int64_t)(use_pc / 8), n = (int64_t)c->ninsts, b = -1;
     if (p == PT || u <= q || u >= n) return false;
-    for (int64_t i = q + 1; i < u && b < 0; i++) {  // el salto que protege el uso
+    for (int64_t i = q + 1; i < u && b < 0; i++) {  // the branch that guards the use
         if (i % 4 == 0) continue;
         uint64_t x = code[i];
         if ((x & 0xfff0000000000000ull) == 0xe240000000000000ull && (int)bits(x, 16, 3) == p && (bool)bits(x, 19, 1) != neg &&
@@ -957,7 +957,7 @@ static bool tex_b_guarded_def(Ctx *c, int64_t q, uint32_t use_pc) {
     }
     if (b < 0) return false;
     int npush = 0;
-    for (int64_t i = q + 1; i < b; i++) {  // el control entre la definición y el salto no sale de (q, b]
+    for (int64_t i = q + 1; i < b; i++) {  // control between the definition and the branch doesn't leave (q, b]
         if (i % 4 == 0) continue;
         uint64_t x = code[i], t12 = x & 0xfff0000000000000ull;
         if (t12 == 0xe240000000000000ull || t12 == 0xe290000000000000ull || t12 == 0xe2a0000000000000ull ||
@@ -966,17 +966,17 @@ static bool tex_b_guarded_def(Ctx *c, int64_t q, uint32_t use_pc) {
             if (t <= q || t > b) return false;
             if (t12 != 0xe240000000000000ull) npush++;
         } else if ((x & 0xfff8000000000000ull) == 0xf0f8000000000000ull || t12 == 0xe340000000000000ull ||
-                   t12 == 0xe350000000000000ull) {  // SYNC, BRK, CONT: a un destino apilado dentro de la zona
+                   t12 == 0xe350000000000000ull) {  // SYNC, BRK, CONT: to a target pushed inside the region
             if (!npush) return false;
         } else if (t12 == 0xe250000000000000ull || t12 == 0xe260000000000000ull || t12 == 0xe320000000000000ull ||
                    t12 == 0xe210000000000000ull || t12 == 0xe200000000000000ull) {
             return false;  // BRX, CAL, RET, JMP, JMX
         }
     }
-    for (int64_t i = 1; i < n; i++) {  // nada más entra en (b, u]
+    for (int64_t i = 1; i < n; i++) {  // nothing else enters (b, u]
         if (i % 4 == 0 || i == b) continue;
         uint64_t x = code[i], t12 = x & 0xfff0000000000000ull;
-        if (t12 == 0xe250000000000000ull) return false;  // BRX: destinos desconocidos
+        if (t12 == 0xe250000000000000ull) return false;  // BRX: unknown targets
         if (t12 == 0xe240000000000000ull || t12 == 0xe290000000000000ull || t12 == 0xe2a0000000000000ull ||
             t12 == 0xe2b0000000000000ull || t12 == 0xe260000000000000ull) {  // BRA, SSY, PBK, PCNT, CAL
             int64_t t = (int64_t)norm_target(i * 8 + 8 + sbits(x, 20, 24)) / 8;
@@ -996,7 +996,7 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
     int64_t *adj = malloc((size_t)cap * sizeof *adj), *work = malloc((size_t)cap * sizeof *work);
     uint8_t *vis = calloc((size_t)n, 1);
     bool ok = e && stk && cnt && adj && work && vis;
-    for (int64_t i = 1; ok && i < n; i++) {  // los destinos que apilan SSY / PBK / PCNT
+    for (int64_t i = 1; ok && i < n; i++) {  // the targets pushed by SSY / PBK / PCNT
         if (i % 4 == 0) continue;
         uint64_t t12 = code[i] & 0xfff0000000000000ull;
         if (t12 == 0xe290000000000000ull || t12 == 0xe2a0000000000000ull || t12 == 0xe2b0000000000000ull) {
@@ -1020,8 +1020,8 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
             falls = !always;
         } else if ((w & 0xfff8000000000000ull) == 0xf0f8000000000000ull || t12 == 0xe340000000000000ull ||
                    t12 == 0xe350000000000000ull) {  // SYNC, BRK, CONT
-            // el SSY / PBK / PCNT que lo empareja: el más cercano antes de i cuya región (hasta su destino) contiene i
-            // (código estructurado); si no se encuentra, a todos los destinos (prudente)
+            // the matching SSY / PBK / PCNT: the closest one before i whose region (up to its target) contains i
+            // (structured code); if none is found, to all the targets (conservative)
             uint64_t want = (w & 0xfff8000000000000ull) == 0xf0f8000000000000ull ? 0xe290000000000000ull
                           : t12 == 0xe340000000000000ull ? 0xe2a0000000000000ull : 0xe2b0000000000000ull;
             int64_t best = -1;
@@ -1037,7 +1037,7 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
             }
             falls = !always;
         } else if (t12 == 0xe250000000000000ull || t12 == 0xe320000000000000ull || t12 == 0xe260000000000000ull) {
-            ok = false;  // BRX, RET, CAL: destinos que no se conocen aquí
+            ok = false;  // BRX, RET, CAL: targets not known here
             if (getenv("LARECOMP_LOG_BINDLESS")) fprintf(stderr, "[bindless] reaching r%d at %#x: indirect flow at %#llx\n", reg, pc, (unsigned long long)(i * 8));
         }
         if (falls) tg[nt++] = tex_b_next(i);
@@ -1048,7 +1048,7 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
         }
     }
     if (ok) {
-        for (int64_t k = 0; k < ne; k++) cnt[e[k][1] + 1]++;  // predecesores, en listas contiguas (CSR)
+        for (int64_t k = 0; k < ne; k++) cnt[e[k][1] + 1]++;  // predecessors, in contiguous lists (CSR)
         for (int64_t i = 0; i < n; i++) cnt[i + 1] += cnt[i];
         int64_t *fill = calloc((size_t)n, sizeof *fill);
         if (!fill) ok = false;
@@ -1070,10 +1070,10 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
                             (unsigned long long)(q * 8), (unsigned long long)w, nfound);
                 ok = false;
             }
-            if (ok) defs[nfound++] = q;  // (vis evita repetirla)
-            continue;  // (este camino acaba aquí)
+            if (ok) defs[nfound++] = q;  // (vis keeps it from being repeated)
+            continue;  // (this path ends here)
         }
-        if (cnt[q] == cnt[q + 1]) {  // sin predecesores: el principio del programa, con reg sin definir
+        if (cnt[q] == cnt[q + 1]) {  // no predecessors: the start of the program, with reg undefined
             if (q == 1) {
                 if (getenv("LARECOMP_LOG_BINDLESS")) fprintf(stderr, "[bindless] reaching r%d at %#x: undefined from the start\n", reg, pc);
                 ok = false;
@@ -1085,25 +1085,26 @@ static int tex_b_reaching(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
     free(e); free(stk); free(cnt); free(adj); free(work); free(vis);
     return ok && nfound ? nfound : -1;
 }
-// la última instrucción antes de pc que escribe reg (sin predicado); -1 si no está en el bloque. Si el bloque no la
-// tiene, vale la única instrucción de todo el programa que escribe reg (Unity carga a veces los manejadores al
-// principio del shader, antes de sus saltos): con un solo escritor, el valor en pc no puede venir de otro sitio.
-// (devuelve cuántos escritores hay en defs: 1 en el bloque, o los que llegan por el grafo; -1 si no se puede)
+// the last instruction before pc that writes reg (unpredicated); -1 if it isn't in the block. If the block doesn't have
+// it, the only instruction in the whole program that writes reg will do (Unity sometimes loads the handles at the start
+// of the shader, before its branches): with a single writer, the value at pc can't come from anywhere else.
+// (returns how many writers there are in defs: 1 in the block, or those that arrive through the graph; -1 if it can't
+// be done)
 static int tex_b_writer(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
     const uint64_t *code = (const uint64_t *)c->code;
     int up = c->tb_upred & 7;
-    bool pw = false;  // (SMRPG) entre este punto y el uso se escribe el predicado del uso
+    bool pw = false;  // (SMRPG) the use's predicate is written between this point and the use
     for (int64_t i = (int64_t)(pc / 8) - 1, n = 0; i > 0 && n < 128; i--) {
-        if (i % 4 == 0) continue;  // (palabra de planificación)
+        if (i % 4 == 0) continue;  // (scheduling word)
         uint64_t w = code[i];
         n++;
         if (tex_b_block_edge(w)) break;
         bool wp = up != PT && tex_b_writes_pred(w, up);
         if ((int)(w & 0xff) != reg || tex_b_no_gpr_dest(w)) { pw |= wp; continue; }
-        // (SMRPG, barrido de shaders) con el predicado contrario al del uso (@!P0 MOV r24 ... @P0 TEX.B r24), si nadie
-        // cambia ese predicado entre medias, no se ejecuta cuando el uso sí: no es su definición
+        // (SMRPG, shader sweep) with the opposite predicate to the use's (@!P0 MOV r24 ... @P0 TEX.B r24), if nothing
+        // changes that predicate in between, it doesn't execute when the use does: it isn't its definition
         if (up != PT && !pw && (uint8_t)(bits(w, 16, 4) ^ 8) == c->tb_upred) { pw |= wp; continue; }
-        if (!tex_b_pred_ok(c, w, reg)) {  // (escrito con predicado: no se sigue)
+        if (!tex_b_pred_ok(c, w, reg)) {  // (written under a predicate: not followed)
             if (getenv("LARECOMP_LOG_BINDLESS"))
                 fprintf(stderr, "[bindless] r%d at %#x: predicated writer %#llx %016llx\n", reg, pc, (unsigned long long)(i * 8), (unsigned long long)w);
             return -1;
@@ -1111,10 +1112,10 @@ static int tex_b_writer(Ctx *c, uint32_t pc, int reg, int64_t *defs) {
         defs[0] = i;
         return 1;
     }
-    return tex_b_reaching(c, pc, reg, defs);  // (fuera del bloque: por el grafo de control)
+    return tex_b_reaching(c, pc, reg, defs);  // (outside the block: through the control-flow graph)
 }
 static bool tex_b_words_at(Ctx *c, uint64_t w, uint32_t wpc, int reg, uint32_t pc, uint32_t *off, int *n, int depth);
-static bool tb_same(const uint32_t *a, int na, const uint32_t *b, int nb) {  // (mismo conjunto de palabras)
+static bool tb_same(const uint32_t *a, int na, const uint32_t *b, int nb) {  // (the same set of words)
     if (na != nb) return false;
     for (int i = 0; i < na; i++) {
         bool in = false;
@@ -1123,8 +1124,8 @@ static bool tb_same(const uint32_t *a, int na, const uint32_t *b, int nb) {  // 
     }
     return true;
 }
-// las palabras de c[2] (desplazamientos) de las que sale el valor de reg en pc: hasta 2, textura y sampler. (SMRPG)
-// Con varias definiciones que llegan, cada una se rastrea desde las palabras que ya hay y todas deben dar las mismas.
+// the c[2] words (offsets) that the value of reg at pc comes from: up to 2, texture and sampler. (SMRPG) With several
+// definitions reaching it, each one is traced from the words already there and all of them must give the same ones.
 static bool tex_b_words(Ctx *c, uint32_t pc, int reg, uint32_t *off, int *n, int depth) {
     if (reg == RZ || depth > 6) return false;
     int64_t defs[TB_MAXDEFS];
@@ -1136,7 +1137,7 @@ static bool tex_b_words(Ctx *c, uint32_t pc, int reg, uint32_t *off, int *n, int
         uint64_t w = ((const uint64_t *)c->code)[defs[k]];
         uint32_t wpc = (uint32_t)(defs[k] * 8), o2[2] = {off[0], off[1]};
         int n2 = *n;
-        uint8_t up = c->tb_upred;  // (los operandos de este escritor se rastrean con su propio predicado como el del uso)
+        uint8_t up = c->tb_upred;  // (this writer's operands are traced with its own predicate as the use predicate)
         c->tb_upred = (uint8_t)bits(w, 16, 4);
         bool r = tex_b_words_at(c, w, wpc, reg, pc, o2, &n2, depth);
         c->tb_upred = up;
@@ -1152,7 +1153,7 @@ static bool tex_b_words(Ctx *c, uint32_t pc, int reg, uint32_t *off, int *n, int
     off[0] = res[0]; off[1] = res[1]; *n = nres;
     return true;
 }
-// (SMRPG) añade una palabra de c[2]; repetida en un OR no cambia el valor (idempotente), en lo demás no se acepta
+// (SMRPG) adds a c[2] word; repeated in an OR it doesn't change the value (idempotent), anywhere else it is rejected
 static bool tb_add(uint32_t *off, int *n, uint32_t o, bool or_op) {
     for (int k = 0; k < *n; k++) if (off[k] == o) return or_op;
     if (*n >= 2) return false;
@@ -1172,9 +1173,9 @@ static bool tex_b_words_at(Ctx *c, uint64_t w, uint32_t wpc, int reg, uint32_t p
         return tb_add(off, n, (uint32_t)bits(w, 20, 14) * 4, false);
     }
     if (t13 == 0x5c98000000000000ull) return tex_b_words(c, wpc, (int)bits(w, 20, 8), off, n, depth + 1);  // MOV r, r
-    if (t13 == 0xef40000000000000ull) {  // LDL r, [RZ + imm]: el manejador se guardó en memoria local y se recarga
-        // (SMRPG, barrido de shaders) se rastrea lo que guardan los STL a la misma dirección, todos antes de la
-        // recarga y sin predicado; todos deben dar las mismas palabras
+    if (t13 == 0xef40000000000000ull) {  // LDL r, [RZ + imm]: the handle was saved to local memory and is reloaded
+        // (SMRPG, shader sweep) what the STLs to the same address store is traced, all of them before the reload and
+        // unpredicated; all must give the same words
         if (a != RZ) return false;
         const uint64_t *code = (const uint64_t *)c->code;
         int64_t imm = sbits(w, 20, 24), at = (int64_t)(wpc / 8);
@@ -1200,7 +1201,7 @@ static bool tex_b_words_at(Ctx *c, uint64_t w, uint32_t wpc, int reg, uint32_t p
                   !bits(w, 39, 1) && !bits(w, 40, 1) && bits(w, 48, 3) == PT;
     bool iadd = (t13 == 0x5c10000000000000ull || t13 == 0x4c10000000000000ull) && !bits(w, 43, 1) && !bits(w, 47, 1) &&
                 !bits(w, 48, 1) && !bits(w, 49, 1);
-    // LOP3 con el tercer operando RZ: OR si la tabla da a|b con c = 0 (minterms 2, 4 y 6 sí, 0 no)
+    // LOP3 with RZ as its third operand: an OR if the table gives a|b with c = 0 (minterms 2, 4 and 6 yes, 0 no)
     bool lop3_reg = t13 == 0x5be0000000000000ull, lop3_cb = (w & 0xfe00000000000000ull) == 0x0200000000000000ull;
     uint32_t lut = lop3_reg ? (uint32_t)bits(w, 28, 8) : (uint32_t)bits(w, 48, 8);
     bool lop3_or = (lop3_reg || lop3_cb) && bits(w, 39, 8) == RZ && !(lut & 1) && (lut & 4) && (lut & 0x10) && (lut & 0x40);
@@ -1210,22 +1211,22 @@ static bool tex_b_words_at(Ctx *c, uint64_t w, uint32_t wpc, int reg, uint32_t p
         return false;
     }
     if (!tex_b_words(c, wpc, a, off, n, depth + 1)) return false;
-    if (t13 == 0x4c40000000000000ull || t13 == 0x4c10000000000000ull || lop3_cb) {  // segundo operando c[2][off]
+    if (t13 == 0x4c40000000000000ull || t13 == 0x4c10000000000000ull || lop3_cb) {  // second operand c[2][off]
         if (bits(w, 34, 5) != 2) return false;
-        return tb_add(off, n, (uint32_t)bits(w, 20, 14) * 4, lop_or || lop3_or);  // (un OR repetido no cambia nada)
+        return tb_add(off, n, (uint32_t)bits(w, 20, 14) * 4, lop_or || lop3_or);  // (a repeated OR changes nothing)
     }
     return tex_b_words(c, wpc, (int)bits(w, 20, 8), off, n, depth + 1);
 }
 
-// SMRPG: las palabras de c[2] del manejador de un TEX.B / TLD.B que está en el registro hreg: la de la textura
-// (combinada o separada) y, si la hay, la del sampler separado. false (y fallo) si no se puede rastrear.
+// SMRPG: the c[2] words of the handle of a TEX.B / TLD.B held in register hreg: the texture's (combined or separate)
+// and, if there is one, the separate sampler's. false (and a failure) if it can't be traced.
 static bool bindless_words(Ctx *c, uint64_t w, int hreg, uint32_t *tex_off, uint32_t *samp_off) {
     uint32_t off[2];
     int n = 0;
     *tex_off = *samp_off = 0;
-    c->tb_upred = (uint8_t)bits(w, 16, 4);  // (el predicado del TEX.B / TLD.B)
+    c->tb_upred = (uint8_t)bits(w, 16, 4);  // (the predicate of the TEX.B / TLD.B)
     if (!tex_b_words(c, c->cur_pc, hreg, off, &n, 0) || !n) {
-        if (getenv("LARECOMP_LOG_BINDLESS")) {  // (diagnóstico) las instrucciones anteriores, para ver el patrón
+        if (getenv("LARECOMP_LOG_BINDLESS")) {  // (diagnostics) the preceding instructions, to see the pattern
             const uint64_t *code = (const uint64_t *)c->code;
             fprintf(stderr, "[bindless] %016llx at %#x: handle r%d not traced; before it:\n", (unsigned long long)w, c->cur_pc, hreg);
             for (int64_t i = (int64_t)(c->cur_pc / 8) - 1, k = 0; i > 0 && k < 24; i--) {
@@ -1233,13 +1234,13 @@ static bool bindless_words(Ctx *c, uint64_t w, int hreg, uint32_t *tex_off, uint
                 fprintf(stderr, "[bindless]   %#06llx: %016llx\n", (unsigned long long)(i * 8), (unsigned long long)code[i]);
                 k++;
             }
-            for (int64_t i = 1; i < (int64_t)c->ninsts; i++)  // y todo lo que escribe ese registro en el programa
+            for (int64_t i = 1; i < (int64_t)c->ninsts; i++)  // and everything in the program that writes that register
                 if (i % 4 && (int)(code[i] & 0xff) == hreg && !tex_b_no_gpr_dest(code[i]))
                     fprintf(stderr, "[bindless]   writer %#06llx: %016llx\n", (unsigned long long)(i * 8), (unsigned long long)code[i]);
-            char path[64];  // (y el programa entero, para analizarlo aparte)
+            char path[64];  // (and the whole program, to analyze it separately)
             snprintf(path, sizeof path, "build/bindless_%llx.bin", (unsigned long long)(uintptr_t)c->code);
             FILE *f = fopen(path, "wb");
-            if (f) { fwrite(code, 8, (size_t)c->ninsts, f); fclose(f); fprintf(stderr, "[bindless]   programa en %s\n", path); }
+            if (f) { fwrite(code, 8, (size_t)c->ninsts, f); fclose(f); fprintf(stderr, "[bindless]   program in %s\n", path); }
         }
         fail(c, "bindless tex: handle r%d not traced", hreg);
         return false;
@@ -1252,8 +1253,8 @@ static bool bindless_words(Ctx *c, uint64_t w, int hreg, uint32_t *tex_off, uint
     return true;
 }
 
-// SMRPG: la ranura de una textura bindless, una por pareja (palabra de textura, palabra de sampler): un shader puede
-// leer la misma textura con dos samplers (y la misma ranura no puede servir a los dos).
+// SMRPG: the slot of a bindless texture, one per (texture word, sampler word) pair: a shader can read the same texture
+// with two samplers (and the same slot can't serve both).
 static int bindless_slot(Ctx *c, uint32_t tex_off, uint32_t samp_off, int type, bool shadow, bool array) {
     for (int s = 0; s < c->info->ntex; s++) {
         ShaderTexture *t = &c->info->tex[s];
@@ -1284,7 +1285,7 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     uint32_t mask = (uint32_t)bits(w, 31, 4);
     int lod_mode = bindless ? (int)bits(w, 37, 3) : (int)bits(w, 55, 3);  // 0 none, 1 lz, 2 lb, 3 ll, 6 lba, 7 lla
     uint32_t tex_off = 0, samp_off = 0;
-    if (bindless) {  // SMRPG: el manejador va en el registro b y los demás parámetros desde b + 1 (como en yuzu)
+    if (bindless) {  // SMRPG: the handle is in register b and the other parameters start at b + 1 (as in yuzu)
         if (!bindless_words(c, w, b, &tex_off, &samp_off)) return;
         b++;
     }
@@ -1353,10 +1354,10 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
-// SMRPG: la condición de código (bits 0-4) de EXIT / KIL / BRA como expresión, o NULL si nunca se cumple. T (15) es
-// siempre; F (0), nunca; las de las banderas Z y S que el traductor sigue (las mismas que CSETP), su expresión; el resto
-// (FCSM / CSM del descarte rápido de VOTE.VTG, acarreo, desbordamiento...) da `unknown` (Ryujinx: falso en EXIT,
-// cierto en BRA).
+// SMRPG: the condition code (bits 0-4) of EXIT / KIL / BRA as an expression, or NULL if it is never met. T (15) is
+// always; F (0), never; the ones on the Z and S flags the translator tracks (the same as CSETP), their expression; the
+// rest (FCSM / CSM from VOTE.VTG's fast culling, carry, overflow...) give `unknown` (Ryujinx: false in EXIT, true in
+// BRA).
 static const char *cc_cond(Ctx *c, int ccc, bool unknown) {
     switch (ccc) {
     case 15: return "true";
@@ -1371,10 +1372,10 @@ static const char *cc_cond(Ctx *c, int ccc, bool unknown) {
     }
 }
 
-// SMRPG: TLD / TLD.B, la lectura de un texel (forma completa; solo GLSL, el renderizador Vulkan). Operandos como en
-// Ryujinx (InstEmitTexture.EmitTex): Ra = [capa], coordenadas enteras; Rb = [manejador (TLD.B)], [lod],
-// [desplazamientos de 4 bits empaquetados], [muestra]. Campos (InstTld / InstTldB): máscara 31-34, dimensión 28-30,
-// LOD 55, desplazamiento 35, multimuestra 50, CL 54. Sin LOD lee el nivel 0.
+// SMRPG: TLD / TLD.B, a single-texel fetch (full form; GLSL only, the Vulkan renderer). Operands as in Ryujinx
+// (InstEmitTexture.EmitTex): Ra = [layer], integer coordinates; Rb = [handle (TLD.B)], [lod], [packed 4-bit offsets],
+// [sample]. Fields (InstTld / InstTldB): mask 31-34, dimension 28-30, LOD 55, offset 35, multisample 50, CL 54. Without
+// LOD it reads level 0.
 static void emit_tld(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     int target = (int)bits(w, 29, 2), tpd = (int)bits(w, 51, 3);
@@ -1386,7 +1387,7 @@ static void emit_tld(Ctx *c, uint64_t w, bool bindless) {
     if (bits(w, 54, 1)) { fail(c, "tld.cl"); return; }
     if (ms || target == 3 || (target == 2 && array)) { fail(c, "tld target %d%s%s", target, array ? " array" : "", ms ? " ms" : ""); return; }
     if (bindless) {
-        if (target == 0 && !array && !lod && !toff) { fail(c, "tld.b 1d (texture buffer)"); return; }  // (Ryujinx: un búfer)
+        if (target == 0 && !array && !lod && !toff) { fail(c, "tld.b 1d (texture buffer)"); return; }  // (Ryujinx: a buffer)
         if (!bindless_words(c, w, b, &tex_off, &samp_off)) return;
         b++;
     }
@@ -1411,11 +1412,11 @@ static void emit_tld(Ctx *c, uint64_t w, bool bindless) {
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
-// SMRPG: TLD4 / TLD4.B, la lectura de los cuatro texels vecinos de una componente (textureGather; solo GLSL).
-// Operandos como en Ryujinx (InstEmitTexture.EmitTld4): Ra = [capa], coordenadas; Rb = [manejador (TLD4.B)],
-// [desplazamientos AOFFI empaquetados: x en los bits 0-5, y en 8-13, con signo], [referencia de comparación]. Campos:
-// TLD4.B componente 38-39 y desplazamiento 36-37; TLD4 componente 56-57, desplazamiento 54-55 e índice 36-48; los dos,
-// DC 50, dimensión 28-30, máscara 31-34. (Del barrido de shaders: el Bokeh DOF y el EASU de URP.)
+// SMRPG: TLD4 / TLD4.B, a fetch of one component of the four neighboring texels (textureGather; GLSL only). Operands as
+// in Ryujinx (InstEmitTexture.EmitTld4): Ra = [layer], coordinates; Rb = [handle (TLD4.B)], [packed AOFFI offsets: x in
+// bits 0-5, y in 8-13, signed], [comparison reference]. Fields: TLD4.B component 38-39 and offset 36-37; TLD4 component
+// 56-57, offset 54-55 and index 36-48; both, DC 50, dimension 28-30, mask 31-34. (From the shader sweep: URP's Bokeh
+// DOF and EASU.)
 static void emit_tld4(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     int target = (int)bits(w, 29, 2), tpd = (int)bits(w, 51, 3);
@@ -1427,7 +1428,7 @@ static void emit_tld4(Ctx *c, uint64_t w, bool bindless) {
     if (d == RZ) return;
     if (!c->glsl) { fail(c, "tld4 (msl)"); return; }
     if (toff == 2) { fail(c, "tld4 ptp"); return; }
-    if (target == 0 || target == 2) { fail(c, "tld4 target %d", target); return; }  // (solo 2D, 2D array y cubo)
+    if (target == 0 || target == 2) { fail(c, "tld4 target %d", target); return; }  // (only 2D, 2D array and cube)
     if (bindless) {
         if (!bindless_words(c, w, b, &tex_off, &samp_off)) return;
         b++;
@@ -1444,7 +1445,7 @@ static void emit_tld4(Ctx *c, uint64_t w, bool bindless) {
     if (n == 2) {
         if (toff == 1) snprintf(xs, sizeof xs, "(vec2(%s, %s) + %s / vec2(tsize%d(0).xy))", cs[0], cs[1], offv, slot);
         else snprintf(xs, sizeof xs, "vec2(%s, %s)", cs[0], cs[1]);
-        if (c->stage != STAGE_VERTEX) {  // (las coordenadas de una textura a otra escala, como en glsl_sample)
+        if (c->stage != STAGE_VERTEX) {  // (the coordinates of a texture at another scale, as in glsl_sample)
             char t2[900];
             snprintf(t2, sizeof t2, "uvs(%s, rscale[%d])", xs, slot + 1);
             strcpy(xs, t2);
@@ -1504,14 +1505,14 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
     if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
-        // SMRPG: EXIT lleva una condición de código en los bits 0-4 (T = 15: siempre). Los shaders de vértices de Unity
-        // hacen VOTE.VTG y luego EXIT CC.FCSM_TR (28): salir solo si todo el primitivo queda fuera de la pantalla
-        // (descarte rápido). Se ejecutaba siempre, antes de escribir gl_Position: no se dibujaba nada. Como en Ryujinx,
-        // una condición que no se sigue (las FCSM / CSM) es falsa.
+        // SMRPG: EXIT carries a condition code in bits 0-4 (T = 15: always). Unity's vertex shaders do VOTE.VTG and
+        // then EXIT CC.FCSM_TR (28): exit only if the whole primitive is off screen (fast culling). It was always
+        // executed, before gl_Position was written: nothing was drawn. As in Ryujinx, a condition that isn't tracked
+        // (the FCSM / CSM ones) is false.
         const char *cond = cc_cond(c, (int)bits(w, 0, 5), false);
         if (cond) sp(&c->body, c->branchy ? "    if (%s) { exit_now = true; break; }\n" : "    if (%s) break;\n", cond);
     } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {  // KIL
-        const char *cond = cc_cond(c, (int)bits(w, 0, 5), false);  // (SMRPG: la misma condición de código que EXIT)
+        const char *cond = cc_cond(c, (int)bits(w, 0, 5), false);  // (SMRPG: the same condition code as EXIT)
         c->info->uses_discard = true;
         if (!cond || getenv("LARECOMP_NO_DISCARD")) {
         } else if (!c->glsl) sp(&c->body, "    if (%s) discard_fragment();\n", cond);
@@ -1520,7 +1521,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xe240000000000000ull, 0xfff0000000000020ull)) {  // BRA
         uint32_t target = norm_target((int64_t)pc + 8 + sbits(w, 20, 24));
         c->uses_branches = true;
-        const char *cond = cc_cond(c, (int)bits(w, 0, 5), true);  // (SMRPG: BRA CC.xx; una desconocida salta, como en Ryujinx)
+        const char *cond = cc_cond(c, (int)bits(w, 0, 5), true);  // (SMRPG: BRA CC.xx; an unknown one branches, as in Ryujinx)
         if (strcmp(cond, "true")) sp(&c->body, "    if (%s) { pc = %uu; continue; }\n", cond, target);
         else sp(&c->body, "    pc = %uu; continue;\n", target);
     } else if (OPM(0xe290000000000000ull, 0xfff0000000000020ull)) {  // SSY
@@ -1806,7 +1807,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0x1c00000000000000ull, 0xfe00000000000000ull)) {  // IADD32I (CC bit 52, X bit 53)
         bool wcc = bits(w, 52, 1), x = bits(w, 53, 1);
         if (wcc || x) c->uses_cc = true;
-        if (c->glsl && maxwell_no_int64)  // (sin 64 bits: el acarreo con uaddCarry)
+        if (c->glsl && maxwell_no_int64)  // (no 64-bit: the carry with uaddCarry)
             sp(&c->body, "    { uint k0, k1 = 0u; uint sum = uaddCarry(%s%s, 0x%08xu, k0);%s%s\n", bits(w, 56, 1) ? "-" : "", R(a),
                (uint32_t)bits(w, 20, 32), x ? " sum = uaddCarry(sum, cc, k1);" : "", wcc ? " cc = (k0 + k1) & 1u;" : "");
         else
@@ -1819,7 +1820,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         bool wcc3 = bits(w, 47, 1), x3 = bits(w, 48, 1);
         if (wcc3 || x3) {  // carry in/out (64-bit address math)
             c->uses_cc = true;
-            if (c->glsl && maxwell_no_int64) {  // (sin 64 bits: dos o tres uaddCarry; el acarreo, su bit bajo como antes)
+            if (c->glsl && maxwell_no_int64) {  // (no 64-bit: two or three uaddCarry; the carry, its low bit as before)
                 sp(&c->body, "    { uint k0, k1, k2 = 0u; uint sum = uaddCarry(%s%s, %s%s, k0); sum = uaddCarry(sum, %s%s, k1);%s\n",
                    bits(w, 51, 1) ? "-" : "", R(a), bits(w, 50, 1) ? "-" : "", B(false), bits(w, 49, 1) ? "-" : "",
                    R((int)bits(w, 39, 8)), x3 ? " sum = uaddCarry(sum, cc, k2);" : "");
@@ -2092,13 +2093,13 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         const char *hi = R((int)bits(w, 39, 8));
         int width = bits(w, 38, 1) ? 64 : 32;
         bool s64 = bits(w, 37, 2) == 3, wrap = bits(w, 50, 1);
-        if (c->glsl && maxwell_no_int64) {  // (sin 64 bits: las dos palabras por separado, glsl_no64_helpers)
+        if (c->glsl && maxwell_no_int64) {  // (no 64-bit: the two words separately, glsl_no64_helpers)
             sp(&c->body, wrap ? "    { uint s = %s & %du; uint vhi = %s, vlo = %s;\n"
                               : "    { uint s = min(%s, %du); uint vhi = %s, vlo = %s;\n",
                sh, wrap ? width - 1 : width, hi, R(a));
             if (right && width == 64) sprintf(t, "%s(vlo, vhi, s)", s64 ? "sar64lo" : "shr64lo");
             else if (right) sprintf(t, "shr64lo(vlo, vhi, s)");
-            else sprintf(t, "shl64hi(vlo, vhi, s)");  // (64 o más: 0, como «s >= 64u ? 0u»)
+            else sprintf(t, "shl64hi(vlo, vhi, s)");  // (64 or more: 0, like "s >= 64u ? 0u")
         } else {
             sp(&c->body, wrap ? "    { uint s = %s & %du; ulong v = (ulong(%s) << 32) | ulong(%s);\n"
                               : "    { uint s = min(%s, %du); ulong v = (ulong(%s) << 32) | ulong(%s);\n",
@@ -2119,9 +2120,9 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         c->info->uses_gmem = true;
         char addr[256];
         if (c->glsl && maxwell_no_int64) {
-            // (sin 64 bits: la dirección en dos palabras —desplazamiento con signo y acarreo—, menos la base del montón con
-            // usubBorrow; el montón no llega a 4 GB, así que dentro de él ga cabe en 32 bits: sus usos «ga & 3ul» pasan a
-            // «ga & 3u» en glsl_finish)
+            // (no 64-bit: the address in two words - signed offset and carry - minus the heap's base with usubBorrow;
+            // the heap is under 4 GB, so inside it ga fits in 32 bits: its "ga & 3ul" uses become "ga & 3u" in
+            // glsl_finish)
             const char *ohi = off < 0 ? "0xFFFFFFFFu" : "0u";
             if (a == RZ) sp(&c->body, "    { uint al = 0x%08xu, ah = %s;", (uint32_t)off, ohi);
             else if (wide)
@@ -2312,17 +2313,18 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (c->stage == STAGE_VERTEX) {
             set_reg(c, d, R(a));  // no SIMD-group functions in vertex functions: lane-local value
         } else if (c->glsl) {
-            // (SMRPG) SHFL con su operando c: tope en los bits 0-4 y máscara de segmento en los 8-12 (la semántica de
-            // shfl de PTX). El índice es relativo a su segmento: con c = 0x1c03, «el hilo 0» es el 0 DE SU CUARTETO (así
-            // reparte el juego un valor por cuarteto para sus derivadas, con FSWZADD). Antes c se ignoraba y se leía el
-            // hilo 0 de todo el subgrupo: cada cuarteto medía su derivada contra otro, lejos, y el nivel de detalle de
-            // la textura se disparaba (en la Adreno, con subgrupos de 64 / 128, la lava salía de un color plano; en el
-            // PC, esas texturas algo borrosas). El grupo de 32 de la Switch, dentro de un subgrupo mayor: (id & ~31).
+            // (SMRPG) SHFL with its c operand: bound in bits 0-4 and segment mask in 8-12 (PTX shfl semantics). The
+            // index is relative to its segment: with c = 0x1c03, "thread 0" is thread 0 OF ITS QUAD (this is how the
+            // game shares out one value per quad for its derivatives, with FSWZADD). Before, c was ignored and thread 0
+            // of the whole subgroup was read: each quad measured its derivative against another one far away, and the
+            // texture's level of detail shot up (on the Adreno, with subgroups of 64 / 128, the lava came out a flat
+            // color; on PC, those textures were somewhat blurry). The Switch's group of 32, inside a larger subgroup:
+            // (id & ~31).
             char cb2[32];
             const char *cv = bits(w, 29, 1) ? (sprintf(cb2, "%uu", (unsigned)bits(w, 34, 13)), cb2) : R((int)bits(w, 39, 8));
             sp(&c->body, "    { uint sid_ = gl_SubgroupInvocationID, sl_ = sid_ & 31u, sc_ = %s, sg_ = (sc_ >> 8) & 31u;\n", cv);
             sp(&c->body, "      uint smin_ = sl_ & sg_, smax_ = smin_ | (sc_ & 31u & ~sg_), sb_ = %s & 31u;\n", bv);
-            if (mode == 1)  // UP: el tope es el límite inferior
+            if (mode == 1)  // UP: the bound is the lower limit
                 sp(&c->body, "      int sj_ = int(sl_) - int(sb_); bool sok_ = sj_ >= int(smax_);\n");
             else if (mode == 2)
                 sp(&c->body, "      uint sj_ = sl_ + sb_; bool sok_ = sj_ <= smax_;\n");
@@ -2334,7 +2336,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = sv_;\n", d); }
             if (pd != PT) { c->pred_used[pd] = 1; sp(&c->body, "      p%d = sok_;\n", pd); }
             sp(&c->body, "    }\n");
-            pd = PT;  // (el predicado ya está: no «true» abajo)
+            pd = PT;  // (the predicate is already set: not "true" below)
         } else if (mode == 3) {
             bool quad = bits(w, 28, 1) && bits(w, 20, 5) < 4;
             sprintf(t, quad ? "quad_shuffle_xor(%s, ushort(%s))" : "simd_shuffle_xor(%s, ushort(%s))", R(a), bv);
@@ -2399,8 +2401,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo)); }
         sp(&c->body, "    }\n");
     } else if (OPM(0x50e0000000000000ull, 0xfff8000000000000ull)) {  // VOTE.VTG (SMRPG)
-        // Control de los hilos de vértices/teselación/geometría en el hardware: sin efecto visible en el shader
-        // (yuzu y Ryujinx lo ignoran igual). Los shaders de vértices de Unity en SMRPG lo llevan casi todos.
+        // Controls the vertex/tessellation/geometry threads in hardware: no visible effect in the shader (yuzu and
+        // Ryujinx ignore it too). Almost all of Unity's vertex shaders in SMRPG have it.
         sp(&c->body, "    /* vote.vtg */\n");
     } else if (OPM(0x5098000000000000ull, 0xfff8000000000000ull)) {  // CSET
         fail(c, "cset");
@@ -2536,9 +2538,9 @@ static const char glsl_prelude[] =
     "float fmax(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : max(a, b)); }\n"
     "uint clz(uint v) { return v == 0u ? 32u : uint(31 - findMSB(v)); }\n"
     "uint popcount(uint v) { return uint(bitCount(v)); }\n"
-    // (SMRPG) MUFU.SIN / COS: el ángulo, a [-pi, pi] (2*pi en dos partes, Cody-Waite). En la Switch lo reduce RRO, que
-    // aquí no hace nada; las GPU de PC aguantan ángulos grandes, la Adreno no (el flujo de la lava, tiempo * velocidad:
-    // la lava salía negra y su calima en ruido)
+    // (SMRPG) MUFU.SIN / COS: the angle, reduced to [-pi, pi] (2*pi in two parts, Cody-Waite). On the Switch that is
+    // done by RRO, which does nothing here; PC GPUs cope with large angles, the Adreno doesn't (the lava flow, time *
+    // speed: the lava came out black and its heat haze as noise)
     "float rr2pi(float x) { float n = floor(x * 0.15915494309189535f + 0.5f); "
     "return fma(-n, 0.0019353071795864769f, fma(-n, 6.28125f, x)); }\n"
     "uint mulhi(uint a, uint b) { uint hi, lo; umulExtended(a, b, hi, lo); return hi; }\n"
@@ -2550,8 +2552,8 @@ static const char glsl_prelude[] =
     "uvec2 rsc(uvec2 c, vec4 s) { return (s.x == 1.0f && s.y == 1.0f) ? c : uvec2(floor((vec2(c) + 0.5f) * s.xy)); }\n"
     // a scaled texture whose contents occupy its top-left part (Dynamic resolution): sample that part
     "vec2 uvs(vec2 uv, vec4 s) { return (s.z == 1.0f && s.w == 1.0f) ? uv : min(uv, 1.0f) * s.zw; }\n";
-// (SMRPG Android) Sin enteros de 64 bits (maxwell_no_int64): la palabra baja / alta de (hi:lo) desplazado s bits.
-// (Con s de 64 o más: 0, o el signo repetido en sar64lo, como los «s >= 64u ?» de la versión de 64 bits.)
+// (SMRPG Android) Without 64-bit integers (maxwell_no_int64): the low / high word of (hi:lo) shifted by s bits. (With s
+// of 64 or more: 0, or the sign repeated in sar64lo, like the "s >= 64u ?" of the 64-bit version.)
 static const char glsl_no64_helpers[] =
     "uint shr64lo(uint lo, uint hi, uint s) { return s == 0u ? lo : s < 32u ? (lo >> s) | (hi << (32u - s)) : "
     "s < 64u ? hi >> (s - 32u) : 0u; }\n"
@@ -2610,12 +2612,12 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     int stage = c->stage;
     Str body = {0};
     glsl_rewrite(c, &body, c->body.buf ? c->body.buf : "");
-    if (maxwell_no_int64 && body.buf) {  // (sin 64 bits: ga es uint —LDG / STG—, sus máscaras también)
+    if (maxwell_no_int64 && body.buf) {  // (no 64-bit: ga is a uint - LDG / STG - and so are its masks)
         static const char *const from[] = {"ga & 3ul", "ga & 2ul"};
         for (int k = 0; k < 2; k++)
             for (char *p = body.buf; (p = strstr(p, from[k]));) {
                 p[6] = 'u';
-                memmove(p + 7, p + 8, strlen(p + 8) + 1);  // ("3ul" -> "3u": una letra menos)
+                memmove(p + 7, p + 8, strlen(p + 8) + 1);  // ("3ul" -> "3u": one letter less)
                 body.len--;
             }
     }
@@ -2814,7 +2816,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (c->uses_cc) sp(&s, "  uint cc = 0u; bool ccz = false, ccs = false;\n");
     if (c->uses_local) sp(&s, "  uint lmem[%d]; for (int li_ = 0; li_ < %d; li_++) lmem[li_] = 0u;\n", c->lmem_words, c->lmem_words);
     if (c->uses_local && getenv("LARECOMP_LOG_LMEM"))
-        fprintf(stderr, "[lmem] etapa %d: %d palabras de memoria local\n", stage, c->lmem_words);
+        fprintf(stderr, "[lmem] stage %d: %d words of local memory\n", stage, c->lmem_words);
     if (dbg) sp(&s, maxwell_dbg_pc == 0xffffffffu ? "  float dbgv = 1.0f;\n" : "  float dbgv = -1.0f;\n");
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0u; uint pbk[16]; uint pbk_n = 0u; uint pcnt[16]; uint pcnt_n = 0u;\n");
@@ -2840,8 +2842,8 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
             for (int comp = 0; comp < 4; comp++) {
                 if (!(m & (1u << comp))) continue;
                 if (dbg) {
-                    // (SMRPG: con LARECOMP_DBG_MARK, el valor en rojo, el verde a 1 - «este dibujo se ejecutó» - y en
-                    // azul el valor / 1000, para valores grandes)
+                    // (SMRPG: with LARECOMP_DBG_MARK, the value in red, green at 1 - "this draw ran" - and the value /
+                    // 1000 in blue, for large values)
                     bool mark = getenv("LARECOMP_DBG_MARK") != NULL;
                     if (comp == 3) sp(&s, "  c%d[%d] = %s(1.0f);\n", rt, comp, cv);
                     else if (mark && comp == 1) sp(&s, "  c%d[%d] = %s(1.0f);\n", rt, comp, cv);
@@ -2856,8 +2858,8 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
                 r++;
             }
         }
-        // (SMRPG, diagnóstico) LARECOMP_DEBUG_FS_COLOR=1: todo shader de fragmentos escribe magenta en c0, para saber
-        // si un fotograma negro viene de lo que calculan los shaders o de que no se rasteriza nada
+        // (SMRPG, diagnostics) LARECOMP_DEBUG_FS_COLOR=1: every fragment shader writes magenta to c0, to tell whether a
+        // black frame comes from what the shaders compute or from nothing being rasterized
         if (c->glsl && (c->omap_target & 0xF) && (!key || key->rt_kind[0] == 0) && getenv("LARECOMP_DEBUG_FS_COLOR"))
             sp(&s, "  c0 = vec4(1.0f, 0.0f, 1.0f, 1.0f);\n");
         if (tint)
@@ -2868,7 +2870,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
             if (c->reg_used[r + 1]) sp(&s, "  gl_FragDepth = as_f(r%d);\n", r + 1);
             else sp(&s, "  gl_FragDepth = gl_FragCoord.z;\n");
         } else if (c->glsl && info->uses_discard && discard_fragdepth()) {
-            sp(&s, "  gl_FragDepth = gl_FragCoord.z;\n");  // (SMRPG Android, prueba: Z tardía obligada)
+            sp(&s, "  gl_FragDepth = gl_FragCoord.z;\n");  // (SMRPG Android, test: forced late Z)
             info->writes_depth = true;
         }
     }
@@ -2943,14 +2945,14 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     c->glsl = key && key->glsl;
     const uint8_t *sph = blob + 0x30;
     const uint8_t *code = blob + 0x80;
-    // compute programs have neither the 0x30-byte NVN header nor an SPH: code starts at the blob. (SMRPG: los de Unity
-    // traen su propia cabecera de 0x100 bytes con el mágico 0x12345679 - los 55 del juego: el código va en +0x100)
+    // compute programs have neither the 0x30-byte NVN header nor an SPH: code starts at the blob. (SMRPG: Unity's have
+    // their own 0x100-byte header with the magic 0x12345679 - all 55 in the game: the code is at +0x100)
     if (stage == STAGE_COMPUTE) code = *(const uint32_t *)blob == 0x12345679u ? blob + 0x100 : blob;
-    // (SMRPG Android) La memoria local, del tamaño que pide la SPH (bytes: baja + alta + pila CRS / 32, como Ryujinx),
-    // en palabras y redondeada a potencia de dos (las direcciones se envuelven con & (n - 1)); sin SPH (cómputo) o sin
-    // tamaño, las 256 de siempre. Con 1 KB por invocación, puesto a cero en cada píxel, un sombreador de la sala de lava
-    // del castillo de Bowser (fs def772159b2635d0) costaba 57 ms por fotograma en la Adreno 740: esa memoria va a la
-    // memoria privada de la GPU. LARECOMP_LMEM_FULL=1: 256 palabras siempre, como antes.
+    // (SMRPG Android) Local memory, the size the SPH asks for (bytes: low + high + CRS stack / 32, like Ryujinx), in
+    // words and rounded to a power of two (addresses wrap with & (n - 1)); with no SPH (compute) or no size, the usual
+    // 256. At 1 KB per invocation, zeroed on every pixel, a shader in the lava room of Bowser's Keep (fs
+    // def772159b2635d0) cost 57 ms per frame on the Adreno 740: that memory goes to the GPU's private memory.
+    // LARECOMP_LMEM_FULL=1: always 256 words, as before.
     c->lmem_words = LMEM_WORDS;
     {
         static int full = -1;
@@ -2965,7 +2967,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             }
         }
     }
-    c->code = code;  // (SMRPG: el rastreo del manejador de TEX.B lee el código; antes este campo no se rellenaba)
+    c->code = code;  // (SMRPG: the TEX.B handle trace reads the code; this field wasn't filled in before)
     if (stage == STAGE_FRAGMENT) {
         c->omap_target = *(const uint32_t *)(sph + 0x48);
         c->omap_depth = (*(const uint32_t *)(sph + 0x4C) >> 1) & 1;
@@ -2977,20 +2979,19 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     for (size_t i = 0; i < n; i++) {
         uint64_t w = ((const uint64_t *)code)[i];
         if (i % 4 == 0) continue;
-        // bra self: también con -16, al hueco de control de justo antes, que norm_target lleva a la misma instrucción
-        // (SMRPG Android: el LutBuilderLdr de URP acaba así; sin esto, ese relleno contaba como un salto de verdad y el
-        // sombreador entero iba dentro del bucle con switch de los que tienen saltos, que SwiftShader —la GPU del
-        // emulador— no terminaba de compilar)
+        // bra self: also with -16, to the control slot right before it, which norm_target maps to the same instruction
+        // (SMRPG Android: URP's LutBuilderLdr ends like this; without this, that padding counted as a real branch and
+        // the whole shader went into the switch loop used for shaders with branches, which SwiftShader - the emulator's
+        // GPU - never finished compiling)
         if ((w & 0xfff0000000000000ull) == 0xe240000000000000ull && end &&
             norm_target((int64_t)(i * 8) + 8 + sbits(w, 20, 24)) == (uint32_t)(i * 8))
             break;
         if (w == 0 && i > 4) break;
         end = i + 1;
     }
-    c->ninsts = end;  // (SMRPG: el rastreo de TEX.B recorre el programa; antes no se rellenaba)
-    // (SMRPG Android) por si la SPH pidiera menos memoria local de la que el código usa con desplazamientos fijos: la
-    // memoria crece hasta cubrir el mayor desplazamiento + tamaño de cada LDL / STL (las direcciones con registro se
-    // envuelven igual que antes)
+    c->ninsts = end;  // (SMRPG: the TEX.B trace walks the program; it wasn't filled in before)
+    // (SMRPG Android) in case the SPH asks for less local memory than the code uses with fixed offsets: the memory
+    // grows to cover the largest offset + size of every LDL / STL (addresses with a register wrap the same as before)
     for (size_t i = 0; i < end && c->lmem_words < LMEM_WORDS; i++) {
         if (i % 4 == 0) continue;
         uint64_t w = ((const uint64_t *)code)[i];

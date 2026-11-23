@@ -88,7 +88,7 @@ void shader_rec_format(const ShaderRec *r, char *out, size_t n) {
         for (int k = 0; k < 8; k++) PUT("%02x", r->blend[i][k]);
     }
     PUT(" k=%u t=%u p=%u", r->a2c, r->topo, r->poly_fill);
-    if (r->zs) PUT(" z=%x", r->zs);  // (SMRPG Android: la profundidad fija en la tubería; shader_prep.h)
+    if (r->zs) PUT(" z=%x", r->zs);  // (SMRPG Android: the depth state baked into the pipeline; shader_prep.h)
 #undef PUT
 }
 
@@ -525,10 +525,10 @@ static double ms_now(void) {
 }
 
 extern bool g_game_las;   // (runtime/game_addresses.h: false en SMRPG)
-bool g_prep_needs_depth;  // (shader_prep.h; lo pone exec.c)
+bool g_prep_needs_depth;  // (shader_prep.h; set by exec.c)
 
-// (SMRPG) el código de cache/shader_code, leído una vez por sombreador en toda la preparación (muchas líneas comparten
-// sombreador); también se recuerda el que no está
+// (SMRPG) the code from cache/shader_code, read once per shader in the whole preparation (many lines share a shader); a
+// missing one is remembered too
 typedef struct { uint64_t h; uint8_t *d; ShaderBlob b; } CodeEnt;
 static CodeEnt *code_tab;
 static size_t code_cap, code_n;
@@ -585,7 +585,7 @@ static bool prep_run_locked(const char *romfs, void (*progress)(int done, int to
             if (n > 0 && fread(list, 1, (size_t)n, f) != (size_t)n) list[0] = 0;
             fclose(f);
         }
-    } else list = strdup(g_game_las ? shipped_list : "");  // (SMRPG: la lista que se distribuye es la de Link's Awakening)
+    } else list = strdup(g_game_las ? shipped_list : "");  // (SMRPG: the list that ships is Link's Awakening's)
     if (!list) return false;
     if (!renderer_prepare_begin()) { free(list); LOG("[shader] preparation: no GPU device yet\n"); return false; }
     uint64_t seen_game;
@@ -595,7 +595,7 @@ static bool prep_run_locked(const char *romfs, void (*progress)(int done, int to
     for (char *p = list; *p; p++) total += *p == '\n';
     for (char *p = seen; p && *p; p++) total += *p == '\n';
     if (progress) progress(0, total + 1);
-    if (!idx_n && g_game_las) {  // (SMRPG, de Unity: el índice no encuentra nada; su código, de cache/shader_code)
+    if (!idx_n && g_game_las) {  // (SMRPG, a Unity game: the index finds nothing; its code comes from cache/shader_code)
         idx_dir(romfs, 0);
         char main_nso[1100];  // (<game files>/exefs/main, next to romfs/)
         snprintf(main_nso, sizeof main_nso, "%s/../exefs/main", romfs);
@@ -635,12 +635,12 @@ static bool prep_run_locked(const char *romfs, void (*progress)(int done, int to
         ShaderRec r;
         if (!shader_rec_parse(line, &r)) continue;
         if (own && !getenv("LARECOMP_SHADER_LIST") && shader_seen_shipped(line)) continue;  // (prepared already)
-        // (SMRPG Android) las líneas de antes de la 0.8.1 no llevan la profundidad: su tubería no sería la del juego
+        // (SMRPG Android) lines from before 0.8.1 don't carry the depth state: their pipeline wouldn't be the game's
         if (r.kind == 'G' && g_prep_needs_depth && !(r.zs & 1)) { nodepth++; continue; }
         const IdxEnt *ev = idx_find(r.vs), *ef = r.kind == 'G' ? idx_find(r.fs) : NULL;
         ShaderBlob bv = {0}, bf = {0};
         uint8_t *dv = ev ? blob_read(ev, &bv, files) : NULL, *df = ef ? blob_read(ef, &bf, files) : NULL;
-        // (SMRPG) lo que el índice no tiene, de la copia propia (code_get: suya hasta code_free)
+        // (SMRPG) what the index doesn't have, from our own copy (code_get: it owns it until code_free)
         const uint8_t *cv = dv ? dv : ev ? NULL : code_get(r.vs, &bv);
         const uint8_t *cf = r.kind != 'G' ? NULL : df ? df : ef ? NULL : code_get(r.fs, &bf);
         if (!cv || (r.kind == 'G' && !cf)) missing++;
@@ -664,24 +664,24 @@ static bool prep_run_locked(const char *romfs, void (*progress)(int done, int to
     free(seen);
     LOG("[shader] prepared %d + %d seen before, not found %d%s%s (%d failed; index %zu shaders in %.0f ms, total %.0f ms)\n",
         prepared, prepared_seen, missing, cancel && *cancel ? ", " : "", cancel && *cancel ? "skipped" : "", failed, idx_n, t_idx, ms_now() - t0);
-    if (nodepth) LOG("[shader] %d líneas de la lista propia sin la profundidad (de antes de la 0.8.1): no preparadas\n", nodepth);
+    if (nodepth) LOG("[shader] %d lines of our own list without the depth state (from before 0.8.1): not prepared\n", nodepth);
     return true;
 }
 
 static void *prep_thread(void *arg) {
-    plat_thread_name("shader-prep");  // (SMRPG: el nombre en /proc, para el diagnóstico de CPU por hilo)
+    plat_thread_name("shader-prep");  // (SMRPG: the name in /proc, for the per-thread CPU diagnostics)
     shader_prep_run((const char *)arg, NULL, NULL);
     return NULL;
 }
 
 void shader_prep_boot(const char *romfs) {
     const char *e = getenv("LARECOMP_SHADER_PREP");
-    if (e && *e) {  // (pruebas: =1 antes del primer fotograma del juego, como la pantalla de inicio; =0 nada)
+    if (e && *e) {  // (tests: =1 before the game's first frame, like the start screen; =0 nothing)
         if (atoi(e)) shader_prep_run(romfs, NULL, NULL);
         return;
     }
-    if (g_game_las || !shader_seen_on()) return;  // (Link's Awakening: la hace su pantalla de inicio)
-    static char root[1100];  // (SMRPG: en segundo plano, mientras salen los logos y el título)
+    if (g_game_las || !shader_seen_on()) return;  // (Link's Awakening: its start screen does it)
+    static char root[1100];  // (SMRPG: in the background, while the logos and the title are showing)
     snprintf(root, sizeof root, "%s", romfs ? romfs : "");
     pthread_t t;
     if (pthread_create(&t, NULL, prep_thread, root) == 0) pthread_detach(t);

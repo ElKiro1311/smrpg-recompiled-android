@@ -25,7 +25,7 @@ done
 printf '#include "cpu.h"\n#include "simd.h"\n' > $W/probe.c
 $Z/zig.exe cc "${flags[@]}" -Iruntime -c $W/probe.c -o $W/probe.o -MD -MF $W/probe.d
 $Z/zig.exe cc "${flags[@]}" -Iruntime '-DGAMELIB_ID="0"' -c tools/gamelib_entry.c -o $W/entry.o -MD -MF $W/entry.d
-# (SMRPG) y tools/game_overrides.c, que va con el código del juego (gamelib-src) e incluye más de la biblioteca de C
+# (SMRPG) and tools/game_overrides.c, which goes with the game code (gamelib-src) and includes more of the C library
 $Z/zig.exe cc "${flags[@]}" -Iruntime -c tools/game_overrides.c -o $W/over.o -MD -MF $W/over.d
 n=0
 for h in $(cat $W/probe.d $W/entry.d $W/over.d | tr ' ' '\n' | tr -d '\r' | sed -n 's|^build/zig/lib/|lib/|p' | sort -u); do
@@ -56,7 +56,7 @@ for t in $line; do
             if [[ $t == *cache* ]]; then  # (paths relative to the folder the probe linked in)
                 p=$(cygpath -u "$t"); [[ $p == /* ]] || p=$W/$p
                 cp "$p" $O/rt/
-                echo "${p##*/}" >> $O/rt/link.rsp  # (sin programas externos: con ucrt64 delante pisaban el principio)
+                echo "${p##*/}" >> $O/rt/link.rsp  # (no external programs: with ucrt64 in front they overwrote the beginning)
             fi ;;
     esac
 done

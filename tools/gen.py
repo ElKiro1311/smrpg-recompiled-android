@@ -570,12 +570,12 @@ def main():
                 start_set.add(t)
     # Code addresses materialized in registers (callbacks, vtables built at runtime): ADR, or
     # ADRP followed shortly by ADD on the same register.
-    # SMRPG: un ADR que es la base de una tabla de saltos comprimida de LLVM (adr xB, L ; ldrb/ldrh ; add xD, xB, xI,
-    # lsl #2 o uxtb/uxth #2 ; br xD) apunta a una etiqueta de la propia función, no a otra función. Si se toma como
-    # inicio de función, la función queda partida, la tabla no se resuelve (sus destinos quedan fuera) y los «case» van
-    # al despachador, que no los conoce («no function at»). El compilador intercala otras instrucciones (hasta 8
-    # constantes entre el add y el br en un xxHash32), así que se mira hasta 16 instrucciones sin saltos de por medio:
-    # main tiene 2.305 tablas así (de 2.307 ADR) y sdk 690 (de 692).
+    # SMRPG: an ADR that is the base of one of LLVM's compressed jump tables (adr xB, L ; ldrb/ldrh ; add xD, xB, xI,
+    # lsl #2 or uxtb/uxth #2 ; br xD) points at a label of the function itself, not at another function. Taken for the
+    # start of a function, it splits the function, the table is not resolved (its targets fall outside) and its "case"s go
+    # to the dispatcher, which does not know them ("no function at"). The compiler interleaves other instructions (up to 8
+    # constants between the add and the br in an xxHash32), so up to 16 instructions without branches in between are
+    # looked at: main has 2,305 such tables (of 2,307 ADRs) and sdk 690 (of 692).
     def is_flow(w2):  # B/BL, B.cond, BR/BLR/RET, CBZ/CBNZ, TBZ/TBNZ
         return ((w2 & 0x7C000000) == 0x14000000 or (w2 & 0xFF000010) == 0x54000000 or (w2 & 0xFE000000) == 0xD6000000
                 or (w2 & 0x7E000000) in (0x34000000, 0x36000000))
@@ -584,7 +584,7 @@ def main():
         for j in range(i + 1, min(i + 17, len(m.words))):
             w2 = m.words[j]
             if ((w2 & 0xFF200000) == 0x8B000000 or (w2 & 0xFFE00000) == 0x8B200000) and ((w2 >> 5) & 31) == rb:
-                rd = w2 & 31  # ADD (registro desplazado o extendido, 64 bits) sobre la base
+                rd = w2 & 31  # ADD (shifted or extended register, 64 bits) on the base
                 for k in range(j + 1, min(j + 17, len(m.words))):
                     w3 = m.words[k]
                     if (w3 & 0xFFFFFC1F) == 0xD61F0000 and ((w3 >> 5) & 31) == rd:  # BR xD
@@ -706,13 +706,13 @@ def main():
         text += [f'void {fname(r)}(Cpu *c);\n' for r in sorted(refs)]
         text += ['\n'.join(lines_out), '\n']
         write_if_changed(path, ''.join(text))
-        # (SMRPG) un trozo más, también para la construcción en el PC del jugador (runtime/gamebuild.c compila los trozos
-        # que anuncia esta línea: sin ella, este se quedaba fuera y faltaban estas funciones al enlazar)
+        # (SMRPG) one more chunk, also for the build on the player's PC (runtime/gamebuild.c compiles the chunks this line
+        # announces: without it this one was left out and these functions were missing when linking)
         nchunks += 1
         print(f'{args.name}: progress {len(order)}/{len(order)} files {nchunks}', file=sys.stderr, flush=True)
         # keep the dispatch tables complete (addrs[i] must match ptrs[i]).
-        # SMRPG: y ordenadas: el runtime las busca con una búsqueda binaria (dispatch_lookup). Añadidas al final, fuera
-        # de orden, hacían fallar la búsqueda de otras funciones («no function at» en un constructor que sí existía).
+        # SMRPG: and sorted: the runtime finds them with a binary search (dispatch_lookup). Added at the end, out of order,
+        # they made the search for other functions fail ("no function at" on a constructor that did exist).
         order = sorted(order + extra)
     import io
     with io.StringIO() as f:

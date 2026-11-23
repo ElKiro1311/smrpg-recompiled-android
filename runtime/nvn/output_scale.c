@@ -433,7 +433,7 @@ void output_scale_log(unsigned long long frame, double dw, double dh, const OutS
 int g_guest_w = 1920, g_guest_h = 1080;
 
 void output_scale(double dw, double dh, bool reshape_allowed, double now, double game_ms, double win_ms, OutScale *o) {
-    // (SMRPG) el ancho de la pantalla del juego en unidades de 1080 líneas: 1920, o más con «Pantalla ancha»
+    // (SMRPG) the width of the game's screen in units of 1080 lines: 1920, or more with "Widescreen"
     const double GW = g_guest_h > 0 ? 1080.0 * g_guest_w / g_guest_h : 1920.0, GH = 1080.0;
     double fit = fmin(dw / GW, dh / GH);
     static double forced = -1, wide_test = -1;
@@ -473,8 +473,8 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
         else if (mode == RES_Q67) h *= 2.0 / 3.0;
         else if (mode == RES_Q85) h *= 0.85;
     }
-    // (SMRPG) supersampling x2..x16: raíz(N) veces más líneas (y columnas); exec.c post_process lo reduce a la ventana
-    // con un filtro de caja. El límite de tamaño de abajo lo recorta si no cabe.
+    // (SMRPG) supersampling x2..x16: sqrt(N) times as many lines (and columns); exec.c post_process scales it down to
+    // the window with a box filter. The size limit below clamps it if it doesn't fit.
     if (forced <= 0 && g_settings.supersample > 1) h *= sqrt((double)g_settings.supersample);
     h = fmax(h, 0.1);  // (.25x of a small window)
     double ax = h * shape, ay = h;

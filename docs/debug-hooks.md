@@ -259,7 +259,7 @@ The per-GPU default switches are explained, with the GPUs they were tested on, i
 | `LARECOMP_VK_DISPLAY_TIMING` | 0 / 1 | Show each frame for a fixed number of display refreshes, through `VK_GOOGLE_display_timing`. Default on for Android. Off elsewhere until tested there. |
 | `LARECOMP_VK_PACING_VSYNC` | 0 | With display timing: the game's vsync stays on its own clock instead of the display's refreshes. |
 | `LARECOMP_VK_MATCH_REFRESH` | 0 | Android: never ask the display for a refresh rate (the menu's display refresh option then does nothing; by default 60 Hz at 60 fps, and frame generation's rate while it runs). |
-| `LARECOMP_VK_PACING_LOG` | frames | With display timing: log the target refresh and the real present time of the first N paced frames (raw `[ritmo]` lines, in ns). |
+| `LARECOMP_VK_PACING_LOG` | frames | With display timing: log the target refresh and the real present time of the first N paced frames (raw `[pacing]` lines, in ns). |
 | `LARECOMP_SIM_SLOW_FRAME_MS` | ms | Sleep this long every frame after frame 2600, to simulate a slow machine. |
 | `LARECOMP_SLOW_FRAME_UNTIL` | frame | With `LARECOMP_SIM_SLOW_FRAME_MS`: stop at that frame (recovery tests). |
 | `LARECOMP_SPIKE_MS` | ms | Stall the presenting thread this long every N frames. |

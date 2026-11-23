@@ -1,16 +1,16 @@
-// (SMRPG) AMD FSR como antialiasing temporal («nativo»: a la misma resolución que se dibuja) con el SDK de AMD FSR 2.x.
-// Sus DLL firmadas van junto al ejecutable: amd_fidelityfx_loader_vk.dll, que carga amd_fidelityfx_upscaler_vk.dll y
-// elige la versión que corre en la tarjeta (FSR 4, de red neuronal, en RDNA 4; FSR 3.1 en las demás). Las cabeceras
-// (MIT) están en third_party/amd-fsr.
+// (SMRPG) AMD FSR as temporal anti-aliasing ("native": at the resolution it is drawn at) with the AMD FSR SDK 2.x. Its
+// signed DLLs go next to the executable: amd_fidelityfx_loader_vk.dll, which loads amd_fidelityfx_upscaler_vk.dll and
+// picks the version that runs on the GPU (FSR 4, neural network, on RDNA 4; FSR 3.1 on the rest). The headers (MIT) are
+// in third_party/amd-fsr.
 //
-// Entradas (exec.c las identifica en cada fotograma): el color HDR de la escena antes del posproceso, su profundidad y
-// los vectores de movimiento que dibuja la pasada MotionVectorRenderPass de URP, que el juego no pide y el runtime
-// fuerza (tools/game_overrides.c, GetRenderPassInputs). La escena se dibuja con el desplazamiento subpíxel que da
-// vk_fsr_jitter, distinto en cada fotograma (exec.c set_viewport). El resultado se escribe de vuelta en el color de la
-// escena: lo que sigue (el posproceso de URP, la interfaz) no cambia.
+// Inputs (exec.c identifies them on every frame): the scene's HDR color before post-processing, its depth and the
+// motion vectors drawn by URP's MotionVectorRenderPass, which the game doesn't ask for and the runtime forces
+// (tools/game_overrides.c, GetRenderPassInputs). The scene is drawn with the subpixel jitter from vk_fsr_jitter,
+// different on every frame (exec.c set_viewport). The result is written back into the scene color: what follows (URP's
+// post-processing, the UI) doesn't change.
 //
-// Todo lo que graba comandos corre en el hilo grabador (record.c rec_CmdCallback), en su sitio del orden; las imágenes
-// del juego están siempre en GENERAL, que el backend del SDK toma como su estado de acceso desordenado.
+// Everything that records commands runs on the recorder thread (record.c rec_CmdCallback), at its place in the order;
+// the game's images are always in GENERAL, which the SDK's backend takes as its unordered access state.
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -24,7 +24,7 @@
 #include "../../../third_party/amd-fsr/api/include/vk/ffx_api_vk.h"
 #include "vk_fsr.h"
 
-static void flog(const char *fmt, ...) {  // (una sola escritura por línea, como rt_log)
+static void flog(const char *fmt, ...) {  // (a single write per line, like rt_log)
     char b[1024];
     va_list ap;
     va_start(ap, fmt);
@@ -47,18 +47,18 @@ static struct {
     VkDevice dev;
     PFN_vkGetDeviceProcAddr gdpa;
     char status[160];
-    FsrApi api;  // (vk_fsr_api: lo mismo para vk_fg.cpp)
+    FsrApi api;  // (vk_fsr_api: the same for vk_fg.cpp)
 } A;
 
 static struct {
     ffxContext ctx;
     uint32_t w, h;
     bool inverted;
-    int version;  // (la pedida al crearlo)
+    int version;  // (the one requested at creation)
     VkImage out;
     VkDeviceMemory out_mem;
-    bool out_ready;  // (en GENERAL)
-    bool failed;     // (no se pudo crear a este tamaño: no se reintenta cada fotograma)
+    bool out_ready;  // (in GENERAL)
+    bool failed;     // (couldn't be created at this size: not retried every frame)
     uint64_t frames;
 } C;
 
@@ -87,7 +87,8 @@ extern "C" bool vk_fsr_available(void) {
             DWORD b = GetFileAttributesA(p);
             have = a != INVALID_FILE_ATTRIBUTES && b != INVALID_FILE_ATTRIBUTES;
         }
-        if (!have) snprintf(A.status, sizeof A.status, "no disponible (faltan las DLL de AMD FSR junto al programa)");
+        if (!have) snprintf(A.status, sizeof A.status, "not available (the AMD FSR DLLs are missing next to the "
+                                                       "program)");
     }
     return have;
 }
@@ -97,7 +98,7 @@ static void msg(uint32_t type, const wchar_t *m) {
     size_t i = 0;
     for (; m && m[i] && i < sizeof b - 1; i++) b[i] = m[i] < 128 ? (char)m[i] : '?';
     b[i] = 0;
-    flog("[fsr] %s: %s", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "aviso", b);
+    flog("[fsr] %s: %s", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "warning", b);
 }
 
 extern "C" bool vk_fsr_init(VkPhysicalDevice phys, VkDevice dev, PFN_vkGetDeviceProcAddr gdpa) {
@@ -110,7 +111,7 @@ extern "C" bool vk_fsr_init(VkPhysicalDevice phys, VkDevice dev, PFN_vkGetDevice
     snprintf(p, sizeof p, "%samd_fidelityfx_loader_vk.dll", dir);
     HMODULE m = LoadLibraryA(p);
     if (!m) {
-        snprintf(A.status, sizeof A.status, "no disponible (no se pudo cargar amd_fidelityfx_loader_vk.dll: %lu)", GetLastError());
+        snprintf(A.status, sizeof A.status, "not available (amd_fidelityfx_loader_vk.dll could not be loaded: %lu)", GetLastError());
         flog("[fsr] %s", A.status);
         return false;
     }
@@ -121,12 +122,12 @@ extern "C" bool vk_fsr_init(VkPhysicalDevice phys, VkDevice dev, PFN_vkGetDevice
     A.dispatch = (PfnFfxDispatch)(void *)GetProcAddress(m, "ffxDispatch");
     A.ok = A.create && A.destroy && A.configure && A.query && A.dispatch;
     if (!A.ok) {
-        snprintf(A.status, sizeof A.status, "no disponible (el cargador de AMD FSR no tiene la API esperada)");
+        snprintf(A.status, sizeof A.status, "not available (AMD's FSR loader lacks the expected API)");
         flog("[fsr] %s", A.status);
         return false;
     }
     A.api = {(void *)A.create, (void *)A.destroy, (void *)A.configure, (void *)A.query, (void *)A.dispatch, phys, dev, gdpa};
-    // las versiones que ofrece el SDK en esta tarjeta (al registro)
+    // the versions the SDK offers on this GPU (to the log)
     VkDeviceContext dc = {dev, phys, gdpa};
     uint64_t count = 16, ids[16] = {};
     const char *names[16] = {};
@@ -145,12 +146,12 @@ extern "C" bool vk_fsr_init(VkPhysicalDevice phys, VkDevice dev, PFN_vkGetDevice
             strncat(list, names[i] ? names[i] : "?", sizeof list - strlen(list) - 1);
         }
     }
-    flog("[fsr] AMD FSR cargado; versiones del escalador en esta tarjeta: %s", count ? list : "(ninguna)");
-    snprintf(A.status, sizeof A.status, "listo (%s)", count && names[0] ? names[0] : "versión desconocida");
+    flog("[fsr] AMD FSR loaded; upscaler versions on this GPU: %s", count ? list : "(none)");
+    snprintf(A.status, sizeof A.status, "ready (%s)", count && names[0] ? names[0] : "unknown version");
     return true;
 }
 
-// Halton (base 2 y 3) desde 1, como la secuencia de FSR; fases: 8 x (salida / entrada)^2
+// Halton (bases 2 and 3) from 1, like FSR's sequence; phases: 8 x (output / input)^2
 static float halton(uint64_t i, uint32_t base) {
     float f = 1, r = 0;
     while (i > 0) {
@@ -169,8 +170,8 @@ extern "C" void vk_fsr_jitter(uint64_t index, uint32_t render_w, uint32_t displa
     *jy = halton(i, 3) - 0.5f;
 }
 
-// (SMRPG) su memoria de vídeo (el contexto, según AMD, y su imagen de salida), para el medidor del menú
-// (runtime/ui/perf_meter.c); se mide al crearlo
+// (SMRPG) its video memory (the context, according to AMD, and its output image), for the menu's meter
+// (runtime/ui/perf_meter.c); measured when it is created
 static uint64_t g_fsr_vram, g_fsr_out_bytes;
 extern "C" uint64_t vk_fsr_vram(void) { return g_fsr_vram; }
 
@@ -220,8 +221,8 @@ static bool make_output(uint32_t w, uint32_t h) {
 
 extern "C" const FsrApi *vk_fsr_api(void) { return A.ok ? &A.api : nullptr; }
 
-// La versión del SDK para ese tipo de contexto cuyo nombre empieza por want (escalador: 4 -> "4.1.2", 3 -> "3.1.6",
-// 2 -> "2.3.4"; generación de fotogramas: 4 -> "4.0.2", 3 -> "3.1.6"); false: la del SDK
+// The SDK version for that context type whose name starts with want (upscaler: 4 -> "4.1.2", 3 -> "3.1.6", 2 ->
+// "2.3.4"; frame generation: 4 -> "4.0.2", 3 -> "3.1.6"); false: the SDK's own
 extern "C" bool vk_fsr_pick_version(uint64_t create_desc_type, int want, void *override_out) {
     if (!want || !A.ok) return false;
     ffxOverrideVersion *o = (ffxOverrideVersion *)override_out;
@@ -243,7 +244,7 @@ extern "C" bool vk_fsr_pick_version(uint64_t create_desc_type, int want, void *o
             o->versionId = ids[i];
             return true;
         }
-    flog("[fsr] la versión %d no está entre las que ofrece el SDK: la suya", want);
+    flog("[fsr] version %d is not among the ones the SDK offers: using its own choice", want);
     return false;
 }
 static bool pick_version(int want, ffxOverrideVersion *o) {
@@ -254,7 +255,7 @@ static bool ensure_ctx(uint32_t w, uint32_t h, bool inverted, int version) {
     if (C.ctx && C.w == w && C.h == h && C.inverted == inverted && C.version == version) return true;
     if (C.failed && C.w == w && C.h == h && C.inverted == inverted && C.version == version) return false;
     if (C.ctx || C.out) {
-        // (sus recursos pueden estar en entregas anteriores, todas en la cola del juego; un cambio de tamaño es raro)
+        // (its resources may be in earlier submissions, all on the game queue; a size change is rare)
         if (g_queue) {
             vk_queue_lock();
             vkQueueWaitIdle(g_queue);
@@ -270,7 +271,7 @@ static bool ensure_ctx(uint32_t w, uint32_t h, bool inverted, int version) {
     be.deviceContext.vkDevice = A.dev;
     be.deviceContext.vkPhysicalDevice = A.phys;
     be.deviceContext.vkDeviceProcAddr = A.gdpa;
-    ffxCreateContextDescUpscaleVersion ver = {};  // (obligatorio desde el SDK 2.1: la API con que se compiló)
+    ffxCreateContextDescUpscaleVersion ver = {};  // (mandatory since SDK 2.1: the API it was compiled with)
     ver.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
     ver.header.pNext = &be.header;
     ver.version = FFX_UPSCALER_VERSION;
@@ -287,20 +288,20 @@ static bool ensure_ctx(uint32_t w, uint32_t h, bool inverted, int version) {
     ffxReturnCode_t r = A.create(&C.ctx, &d.header, nullptr);
     if (r != FFX_API_RETURN_OK) {
         C.ctx = nullptr;
-        snprintf(A.status, sizeof A.status, "error al crear el contexto a %ux%u (%u)", w, h, (unsigned)r);
+        snprintf(A.status, sizeof A.status, "error creating the context at %ux%u (%u)", w, h, (unsigned)r);
         flog("[fsr] %s", A.status);
         return false;
     }
     if (!make_output(w, h)) {
         destroy_ctx();
-        snprintf(A.status, sizeof A.status, "sin memoria para su imagen de %ux%u", w, h);
+        snprintf(A.status, sizeof A.status, "no memory for its %ux%u image", w, h);
         flog("[fsr] %s", A.status);
         return false;
     }
     ffxQueryGetProviderVersion v = {};
     v.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     const char *name = A.query(&C.ctx, &v.header) == FFX_API_RETURN_OK && v.versionName ? v.versionName : "?";
-    snprintf(A.status, sizeof A.status, "AMD FSR %s a %ux%u", name, w, h);
+    snprintf(A.status, sizeof A.status, "AMD FSR %s at %ux%u", name, w, h);
     {
         FfxApiEffectMemoryUsage mu = {};
         ffxQueryDescUpscaleGetGPUMemoryUsage q = {};
@@ -308,10 +309,10 @@ static bool ensure_ctx(uint32_t w, uint32_t h, bool inverted, int version) {
         q.gpuMemoryUsageUpscaler = &mu;
         uint64_t ctx = A.query(&C.ctx, &q.header) == FFX_API_RETURN_OK ? mu.totalUsageInBytes : 0;
         g_fsr_vram = ctx + g_fsr_out_bytes;
-        flog("[fsr] memoria de vídeo: %.0f MB (contexto %.0f MB, imagen de salida %.0f MB)", g_fsr_vram / 1048576.0,
+        flog("[fsr] video memory: %.0f MB (context %.0f MB, output image %.0f MB)", g_fsr_vram / 1048576.0,
              ctx / 1048576.0, g_fsr_out_bytes / 1048576.0);
     }
-    flog("[fsr] en uso: %s (profundidad %s)", A.status, inverted ? "invertida" : "normal");
+    flog("[fsr] in use: %s (depth %s)", A.status, inverted ? "reversed" : "normal");
     C.failed = false;
     return true;
 }
@@ -342,14 +343,14 @@ static void barrier(VkCommandBuffer cb) {
 extern "C" void vk_fsr_record(VkCommandBuffer cb, const void *data) {
     const FsrDispatch *f = (const FsrDispatch *)data;
     if (!A.ok || !f->color.image || !f->depth.image || !f->mv.image) return;
-    uint32_t w = f->color.width, h = f->color.height;  // (las imágenes: lo dibujado y la salida, dentro)
+    uint32_t w = f->color.width, h = f->color.height;  // (the images: the drawn part and the output, inside them)
     uint32_t rw = f->render_w ? f->render_w : w, rh = f->render_h ? f->render_h : h;
     uint32_t ow = f->out_w ? f->out_w : rw, oh = f->out_h ? f->out_h : rh;
     if (rw > w || rh > h || ow > w || oh > h) return;
     bool fresh = !C.ctx || C.w != w || C.h != h || C.inverted != f->depth_inverted || C.version != f->version;
     if (!ensure_ctx(w, h, f->depth_inverted, f->version)) return;
     barrier(cb);
-    if (!C.out_ready) {  // (la imagen de salida, de UNDEFINED a GENERAL una vez)
+    if (!C.out_ready) {  // (the output image, from UNDEFINED to GENERAL once)
         VkImageMemoryBarrier ib = {};
         ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         ib.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -380,8 +381,8 @@ extern "C" void vk_fsr_record(VkCommandBuffer cb, const void *data) {
     d.frameTimeDelta = f->frame_ms > 0 ? f->frame_ms : 16.67f;
     d.preExposure = 1.0f;
     d.reset = f->reset || fresh;
-    // la cámara del fotograma (exec.c la saca de la vista-proyección de URP); sin ella, valores típicos de Unity.
-    // FSR los usa para sus umbrales de profundidad.
+    // the frame's camera (exec.c gets it from URP's view-projection); without it, typical Unity values. FSR uses them
+    // for its depth thresholds.
     d.cameraNear = f->cam_near > 0 ? f->cam_near : 0.3f;
     d.cameraFar = f->cam_far > d.cameraNear ? f->cam_far : 1000.0f;
     d.cameraFovAngleVertical = f->cam_fov > 0.01f && f->cam_fov < 3.0f ? f->cam_fov : 0.6f;
@@ -389,11 +390,11 @@ extern "C" void vk_fsr_record(VkCommandBuffer cb, const void *data) {
     ffxReturnCode_t r = A.dispatch(&C.ctx, &d.header);
     if (r != FFX_API_RETURN_OK) {
         static int nlog;
-        if (nlog++ < 5) flog("[fsr] ffxDispatch falló (%u)", (unsigned)r);
+        if (nlog++ < 5) flog("[fsr] ffxDispatch failed (%u)", (unsigned)r);
         return;
     }
     barrier(cb);
-    VkImageBlit bl = {};  // el resultado, de vuelta en el color de la escena
+    VkImageBlit bl = {};  // the result, back into the scene color
     bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     bl.srcOffsets[1] = {(int32_t)ow, (int32_t)oh, 1};
     bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -407,5 +408,5 @@ extern "C" void vk_fsr_record(VkCommandBuffer cb, const void *data) {
 
 extern "C" const char *vk_fsr_status(void) {
     if (!A.status[0]) vk_fsr_available();
-    return A.status[0] ? A.status : "sin cargar todavía";
+    return A.status[0] ? A.status : "not loaded yet";
 }

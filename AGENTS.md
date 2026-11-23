@@ -1,9 +1,10 @@
 # Notes for agents
 
-- **What this is.** SMRPG Recomp: an unofficial port of *Super Mario RPG* (Switch, 2023, v1.0.0 only) to Windows
-  (branch `main`) and Android (branch `android`), built on the LAS Recomp runtime, which statically recompiles the
-  Switch release of *Link's Awakening*. Read [ESTADO.md](ESTADO.md) and [VERSIONES.txt](VERSIONES.txt) (Spanish)
-  before changing anything; the rest of this file is LAS Recomp's and still applies where it makes sense.
+- **What this is.** SMRPG Recomp: an unofficial port of *Super Mario RPG* (Switch, 2023, v1.0.0 only) to Android, built
+  on the LAS Recomp runtime, which statically recompiles the Switch release of *Link's Awakening*. The Windows port is in
+  [smrpg-recompiled](https://github.com/ElKiro1311/smrpg-recompiled); this one split from it at 0.48.0-beta. Read
+  [STATUS.md](STATUS.md) and [CHANGELOG-ANDROID.txt](CHANGELOG-ANDROID.txt) before changing anything; the rest of this
+  file is LAS Recomp's and still applies where it makes sense.
   - What is only for Link's Awakening (`tools/rando`, `third_party/LAS-Randomizer`, its hooks in `runtime/hle/`, the
     start screen, macOS and Linux) is inherited and unused here; `tools/rando/patch_variants.json` is still read by
     `tools/gen.py`.
@@ -26,7 +27,7 @@
   | Task | Read first |
   |---|---|
   | How the parts fit together | [docs/architecture.md](docs/architecture.md) |
-  | Building | README "Compilar" and LEEME.md (SMRPG), [docs/BUILD-windows.md](docs/BUILD-windows.md), [docs/linux.md](docs/linux.md) |
+  | Building | README "Building" (SMRPG), [docs/BUILD-windows.md](docs/BUILD-windows.md), [docs/linux.md](docs/linux.md) |
   | A crash or hang | the log (`lasrecomp.log` in the data folder): the crash line names the guest address (`main+0x...`). Map it with `tools/sym.py` and read the code there before changing anything. Debug switches: [docs/debug-hooks.md](docs/debug-hooks.md) |
   | Rendering | `runtime/nvn/cmdbuf.c` (recording), `renderer.m` / `metal.m` (Metal), `vulkan/exec.c` (Vulkan), `maxwell/translate.c` (shaders); per-GPU Vulkan defaults: [docs/vulkan-gpu-defaults.md](docs/vulkan-gpu-defaults.md) |
   | Game behaviour or a new feature | `runtime/hle/` and the hooks in `tools/patches.py` and `runtime/hle/hooks.c` |
@@ -41,8 +42,8 @@
   - Refer to them only as the player's own extracted game files. Don't write about how they are obtained, in code,
     comments, docs, commits or pull requests.
 
-- **Branch.** `main` is the PC port (its releases carry the Windows installer) and `android` the Android port. There
-  are no `beta_<n>` branches. Issues and pull requests go to this repository, never to peiikai/LASRecomp.
+- **Branch.** Everything goes to `main`; the releases carry the APK. There are no `beta_<n>` branches. Issues and pull
+  requests go to this repository, never to peiikai/LASRecomp.
 
 - **Fix the cause, not the symptom.**
   - Before changing code, find why it happens: the faulting instruction, the value that went wrong and who wrote
@@ -70,7 +71,7 @@
 
 - **Testing.**
   - A fix is verified only when you've seen it work in game. A clean build or a quiet log is not enough.
-  - (SMRPG Recomp: `tools/probar.sh`; `tools/shot.sh` is LAS Recomp's.) `tools/shot.sh <frame> [seconds]` runs the game with scripted input (`LARECOMP_INPUT`), warps
+  - (SMRPG Recomp: `tools/run_test.sh`; `tools/shot.sh` is LAS Recomp's.) `tools/shot.sh <frame> [seconds]` runs the game with scripted input (`LARECOMP_INPUT`), warps
     (`LARECOMP_WARP_AT`) and seeds (`LARECOMP_RANDO_SEED`), and saves a screenshot. Many more debug hooks are
     documented where they are defined (grep `getenv("LARECOMP_`).
   - For test runs, use a scratch save folder (`LARECOMP_SAVE_DIR`, `tools/fresh_save.sh`) so the user's saves
@@ -89,7 +90,10 @@
 
 - **Menus and text.**
   - Settings get short labels and vanilla defaults: no presets, no paragraphs.
-  - In this port the menus and the docs are in Spanish.
+  - **Everything is written in English**: code, comments, log messages, commits, docs, release notes. What a player reads
+    also exists in Spanish: `runtime/ui/lang_es.inc` (the menu: every text given to `tr()` needs its line there;
+    `tools/check_lang.py` checks it), `tools/android/app/res/values-es`, `README.es.md`
+    and the Spanish part of the release notes.
   - Player-facing text (menus, README, release notes, issue replies) is plain and short.
 
 - **Code.**

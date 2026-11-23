@@ -29,16 +29,16 @@ typedef struct NvnTexture {
     uint64_t addr;  // guest address of texel storage
     NvnPool *pool;
     uint64_t pool_offset;
-    uint64_t pool_guest;  // SMRPG: el NVNmemoryPool del juego (nvnTextureGetMemoryPool lo devuelve; Unity sube así las texturas)
+    uint64_t pool_guest;  // SMRPG: the game's NVNmemoryPool (nvnTextureGetMemoryPool returns it; Unity uploads textures this way)
     void *backend;  // renderer-side texture
     uint64_t debug_id;
     uint32_t pool_refs;  // texture pool entries that name it (cleared when it is finalized: runtime/nvn/objects.c)
     bool format_views;   // named through a view in a format the backend can only give with a flag (Metal: PixelFormatView)
-    bool dead;           // (SMRPG) finalizada: sin imagen; el objeto espera en el cementerio de objects.c
-    bool widened;        // (SMRPG) textura de ventana agrandada a la pantalla ancha: su memoria del juego es la de
-                         // 1920x1080, así que nunca se sube desde ella (solo la dibuja la GPU)
-    bool screen;         // (SMRPG) textura de ventana de Unity (o la profundidad de su backbuffer), creada a 1920x1080:
-                         // mide lo que la pantalla del juego, también si cambia en marcha (vulkan/textures.c)
+    bool dead;           // (SMRPG) finalized: no image; the object waits in objects.c's graveyard
+    bool widened;        // (SMRPG) window texture enlarged to widescreen: its game memory is the 1920x1080 one, so it
+                         // is never uploaded from there (only the GPU draws it)
+    bool screen;         // (SMRPG) Unity window texture (or its backbuffer's depth), created at 1920x1080: it is the
+                         // size of the game's screen, even if that changes on the fly (vulkan/textures.c)
     char label[64];
 } NvnTexture;
 
@@ -47,13 +47,13 @@ typedef struct {
     float lod_min, lod_max, lod_bias, max_aniso;
     float border[4];
     void *backend;
-    int32_t backend_af;  // (SMRPG) el anisótropo forzado con el que se creó backend (Ajustes > Filtrado anisótropo)
+    int32_t backend_af;  // (SMRPG) forced anisotropy that backend was created with (Settings > Anisotropic filtering)
 } NvnSamplerDesc;
 
-// Our layout of the guest NVNtextureView. SMRPG: el NVN de los SDK nuevos (NVN 55) solo reserva 16 bytes para la vista
-// (el juego la guarda en un hueco de 16 bytes de la pila, justo debajo de los registros guardados): el registro de
-// 0x1C bytes de LASRecomp escribía encima del fp/lr y de x27/x28 guardados (el hilo gráfico de Unity volvía con x28 = 0).
-// Mismos campos, más estrechos; nxnative hace lo mismo (dm/gfx/nvn/nvn_obj.h view_t).
+// Our layout of the guest NVNtextureView. SMRPG: the NVN of newer SDKs (NVN 55) only reserves 16 bytes for the view
+// (the game keeps it in a 16-byte stack slot, right below the saved registers): LASRecomp's 0x1C-byte record wrote over
+// the saved fp/lr and x27/x28 (Unity's graphics thread came back with x28 = 0). Same fields, narrower; nxnative does
+// the same (dm/gfx/nvn/nvn_obj.h view_t).
 typedef struct {
     uint8_t setmask;  // which fields are overridden (1 levels, 2 layers, 4 format, 8 swizzle, 16 ds_mode, 32 target)
     uint8_t base_level, num_levels, target;
@@ -62,7 +62,7 @@ typedef struct {
     uint8_t ds_mode, pad;
     uint8_t swizzle[4];
 } NvnTextureView;
-_Static_assert(sizeof(NvnTextureView) == 16, "NVNtextureView: 16 bytes en el NVN de los SDK nuevos");
+_Static_assert(sizeof(NvnTextureView) == 16, "NVNtextureView: 16 bytes in the NVN of newer SDKs");
 
 // A view naming a texture (pool entry, render target, clear, copy): one in another format is told to the backend before
 // the texture is used through it.
@@ -147,7 +147,7 @@ enum {
     CMD_COPY_TEXTURE_TO_TEXTURE, CMD_DOWNSAMPLE, CMD_UPDATE_UNIFORM_BUFFER, CMD_FENCE_SYNC, CMD_WAIT_SYNC,
     CMD_BARRIER, CMD_SIGNAL_EVENT, CMD_WAIT_EVENT, CMD_REPORT_COUNTER, CMD_DISCARD_COLOR,
     CMD_DISCARD_DEPTH_STENCIL, CMD_SET_COPY_STRIDES, CMD_DRAW_TEXTURE, CMD_RESOLVE_DEPTH,
-    CMD_BIND_SEP_TEXTURES, CMD_BIND_SEP_SAMPLERS,  // (SMRPG: texturas y samplers separados, c[2] 0x168 / 0x568 + 8r)
+    CMD_BIND_SEP_TEXTURES, CMD_BIND_SEP_SAMPLERS,  // (SMRPG: separate textures and samplers, c[2] 0x168 / 0x568 + 8r)
     CMD_COUNT
 };
 

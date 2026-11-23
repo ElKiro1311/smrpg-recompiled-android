@@ -37,7 +37,7 @@ def romfs_files(romfs: Path) -> dict:
         for name in filenames:
             if name.startswith('.'):
                 continue
-            if dirpath == str(romfs) and name == '_filelist.json':  # (SMRPG: la lista que deja la extracción, no del juego)
+            if dirpath == str(romfs) and name == '_filelist.json':  # (SMRPG: the list the extraction leaves, not the game's)
                 continue
             p = Path(dirpath, name)
             if p.is_file():

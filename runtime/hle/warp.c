@@ -89,7 +89,7 @@ void warp_request(const char *level, const char *locator) {
 int g_start_screen;  // runtime/ui/launcher.mm: the start screen is up - before the first boot nothing is loaded here
 
 int game_in_play(void) {
-    if (g_start_screen || !g_game_las) return 0;  // (SMRPG: GAME_MGR es una dirección de LA)
+    if (g_start_screen || !g_game_las) return 0;  // (SMRPG: GAME_MGR is an LA address)
     uint64_t gm = LD64(GA(GAME_MGR));
     return gm && LD64(gm + 0x4b8) != 0;
 }
@@ -207,7 +207,7 @@ void warp_frame(uint64_t frame) {
     g_frame_now = frame;
     crash_test(frame);
     shots_test(frame);
-    if (!g_game_las) return;  // (SMRPG: lo que sigue es de Link's Awakening y usa sus direcciones)
+    if (!g_game_las) return;  // (SMRPG: what follows is for Link's Awakening and uses its addresses)
     { extern void shader_tour_tick(uint64_t); shader_tour_tick(frame); }
     warp_test(frame);
     warp_on_load(frame);

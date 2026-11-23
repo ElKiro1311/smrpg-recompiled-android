@@ -1,5 +1,5 @@
-// (SMRPG) Generación de fotogramas de AMD FSR (vulkan/vk_fg.cpp): la swapchain de AMD en lugar de la de device.c y,
-// cada fotograma con FSR, su preparación con la profundidad, los vectores de movimiento y la cámara (exec.c).
+// (SMRPG) AMD FSR frame generation (vulkan/vk_fg.cpp): AMD's swapchain in place of device.c's and, on every frame with
+// FSR, its preparation with the depth, the motion vectors and the camera (exec.c).
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,59 +11,62 @@
 extern "C" {
 #endif
 
-// La cámara del fotograma en el espacio del mundo de Unity (exec.c la saca de la vista-proyección de URP)
+// The frame's camera in Unity world space (exec.c gets it from URP's view-projection)
 typedef struct {
-    float pos[3], up[3], right[3], fwd[3];  // posición y ejes (unitarios)
-    float fov_y;                            // campo de visión vertical, en radianes
-    float znear, zfar;                      // planos (zfar muy grande: infinito)
+    float pos[3], up[3], right[3], fwd[3];  // position and axes (unit length)
+    float fov_y;                            // vertical field of view, in radians
+    float znear, zfar;                      // planes (very large zfar: infinite)
     int ok;
 } FgCamera;
 
-// Lo que graba el paquete del hilo grabador en cada fotograma con FSR (exec.c fsr_dispatch, record.c rec_CmdCallback)
+// What the recorder thread's packet records on every frame with FSR (exec.c fsr_dispatch, record.c rec_CmdCallback)
 typedef struct {
-    FsrImage depth, mv;           // la profundidad y los vectores de movimiento de la escena (los de FSR)
-    uint32_t render_w, render_h;  // lo dibujado (arriba a la izquierda de las imágenes)
-    float jitter_x, jitter_y;     // el desplazamiento subpíxel del fotograma, en píxeles
-    float mv_scale_x, mv_scale_y; // de los vectores de URP a píxeles hacia el fotograma anterior
-    bool reset;                   // la historia no vale (corte, cambio de tamaño)
+    FsrImage depth, mv;           // the scene's depth and motion vectors (FSR's)
+    uint32_t render_w, render_h;  // the drawn part (top left of the images)
+    float jitter_x, jitter_y;     // the frame's subpixel jitter, in pixels
+    float mv_scale_x, mv_scale_y; // from URP's vectors to pixels toward the previous frame
+    bool reset;                   // the history is invalid (cut, size change)
     bool depth_inverted;
-    bool paused;                  // el menú del runtime está abierto: no se generan fotogramas
-    int version;                  // la pedida: 0 la del SDK (la mejor de la tarjeta), 4 o 3
-    int pic[4];                   // dónde está la imagen del juego en la ventana (x, y, ancho, alto)
+    bool paused;                  // the runtime menu is open: no frames are generated
+    int version;                  // the requested one: 0 the SDK's (the best for the GPU), 4 or 3
+    int pic[4];                   // where the game image is in the window (x, y, width, height)
     FgCamera cam;
-    FsrImage hudless;             // la ventana sin el menú del runtime (device.c vk_fg_hudless); image 0: sin ella
+    FsrImage hudless;             // the window without the runtime menu (device.c vk_fg_hudless); image 0: without it
 } FgPrepare;
 
-// (device.c) la ventana sin el menú del runtime (contador de FPS, cronómetro), que este fotograma copia antes de que el
-// menú dibuje encima: con ella AMD no interpola lo que el menú pone
+// (device.c) the window without the runtime menu (FPS counter, timer), which this frame copies before the menu draws
+// over it: with it AMD doesn't interpolate what the menu adds
 bool vk_fg_hudless_wanted(void);
 FsrImage vk_fg_hudless(void);
 
-bool vk_fg_dll(void);              // amd_fidelityfx_framegeneration_vk.dll (y las de FSR) junto al ejecutable
-uint32_t vk_fg_queue_count(void);  // colas de la familia gráfica que conviene pedir: 3 con la DLL, 1 sin ella
-// (device.c, con el dispositivo creado) la cola del juego y las dos más para la presentación y la adquisición de AMD
+bool vk_fg_dll(void);              // amd_fidelityfx_framegeneration_vk.dll (and the FSR ones) next to the executable
+uint32_t vk_fg_queue_count(void);  // graphics family queues worth requesting: 3 with the DLL, 1 without it
+// (device.c, with the device created) the game queue and the two extra ones for AMD's present and acquire
 void vk_fg_queues(VkQueue game, uint32_t family, VkQueue present, VkQueue acquire);
-bool vk_fg_usable(void);           // el SDK cargado, las colas y sin un fallo antes (el ajuste lo mira device.c)
-bool vk_fg_active(void);           // la swapchain de la ventana es la de AMD
-bool vk_fg_generating(void);       // ... y el último fotograma preparado generaba
-bool vk_fg_rebuild_wanted(void);   // el contexto de generación no sirve (otra versión o escena mayor): device.c recrea
-                                   // la swapchain (con la GPU parada se va el contexto, y el fotograma siguiente hace otro)
-// Las llamadas de swapchain de device.c mientras se quiere la generación. La primera creación hace el contexto de la
-// swapchain de AMD; las siguientes (otro tamaño) la recrean en su sitio. Un fallo: VK_ERROR_* y device.c sigue con la
-// suya. destroy solo anota el objeto (la creación siguiente lo recrea, o vk_fg_release lo destruye tras los contextos).
+bool vk_fg_usable(void);           // the SDK loaded, the queues there and no earlier failure (device.c checks the setting)
+bool vk_fg_active(void);           // the window's swapchain is AMD's
+bool vk_fg_generating(void);       // ... and the last prepared frame was generating
+bool vk_fg_rebuild_wanted(void);   // the generation context is unusable (another version or a larger scene): device.c
+                                   // recreates the swapchain (with the GPU idle the context goes away, and the next
+                                   // frame makes another)
+                                   // device.c's swapchain calls while generation is wanted. The first creation makes
+                                   // AMD's swapchain context; later ones (another size) recreate the swapchain in
+                                   // place. On failure: VK_ERROR_* and device.c carries on with its own. destroy only
+                                   // notes the object (the next creation recreates it, or vk_fg_release destroys it
+                                   // after the contexts).
 VkResult vk_fg_create_swapchain(const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR *sc);
 void vk_fg_destroy_swapchain(VkSwapchainKHR sc);
 VkResult vk_fg_get_images(VkSwapchainKHR sc, uint32_t *n, VkImage *img);
 VkResult vk_fg_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem, uint32_t *idx);
-VkResult vk_fg_present(VkQueue queue, const VkPresentInfoKHR *pi);  // (hilo grabador)
-void vk_fg_prepare_record(VkCommandBuffer cb, const void *prepare);    // (hilo grabador) un FgPrepare
-void vk_fg_frame_end_record(VkCommandBuffer cb, const void *unused);   // (hilo grabador) antes de entregar la ventana
-void vk_fg_wait_presents(void);    // las presentaciones de AMD en curso, hechas (antes de vkDeviceWaitIdle)
-void vk_fg_release(void);          // todo abajo (con la GPU parada y el grabador quieto)
-const char *vk_fg_status(void);    // para el menú
-// (pruebas) LARECOMP_FG_PSHOT=N: desde el fotograma N, seis imágenes seguidas tal como se presentan
-// (build/fg_pres_<i>_<real|generado>.png); LARECOMP_FG_MV="x,y" multiplica la escala de los vectores; LARECOMP_FG_DEBUG=1
-// las marcas de AMD en los generados, =2 su comprobador de entradas (avisos al registro)
+VkResult vk_fg_present(VkQueue queue, const VkPresentInfoKHR *pi);  // (recorder thread)
+void vk_fg_prepare_record(VkCommandBuffer cb, const void *prepare);    // (recorder thread) an FgPrepare
+void vk_fg_frame_end_record(VkCommandBuffer cb, const void *unused);   // (recorder thread) before the window is submitted
+void vk_fg_wait_presents(void);    // AMD's in-flight presents, done (before vkDeviceWaitIdle)
+void vk_fg_release(void);          // everything torn down (with the GPU and the recorder idle)
+const char *vk_fg_status(void);    // for the menu
+// (tests) LARECOMP_FG_PSHOT=N: from frame N on, six consecutive images exactly as presented
+// (build/fg_pres_<i>_<real|generado>.png); LARECOMP_FG_MV="x,y" multiplies the motion vector scale; LARECOMP_FG_DEBUG=1
+// AMD's marks on the generated frames, =2 its input checker (warnings to the log)
 
 #ifdef __cplusplus
 }

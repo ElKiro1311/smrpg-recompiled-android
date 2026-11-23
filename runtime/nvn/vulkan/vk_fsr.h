@@ -1,4 +1,4 @@
-// (SMRPG) AMD FSR como antialiasing temporal: vulkan/vk_fsr.cpp (el SDK) y exec.c (dónde y con qué se llama).
+// (SMRPG) AMD FSR as temporal anti-aliasing: vulkan/vk_fsr.cpp (the SDK) and exec.c (where and with what it is called).
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,24 +15,24 @@ typedef struct {
     VkImageUsageFlags usage;
 } FsrImage;
 
-// Lo que graba un paquete del hilo grabador (record.c rec_CmdCallback): copiado tal cual en el paquete.
+// What a recorder thread packet records (record.c rec_CmdCallback): copied as is into the packet.
 typedef struct {
-    FsrImage color;  // el color HDR de la escena (se escribe el resultado de vuelta en él)
-    FsrImage depth;  // su profundidad
-    FsrImage mv;     // los vectores de movimiento de URP (RG16F, en UV)
-    float jitter_x, jitter_y;      // el desplazamiento subpíxel de este fotograma, en píxeles de la imagen
-    float mv_scale_x, mv_scale_y;  // de los vectores de URP a píxeles hacia el fotograma anterior
+    FsrImage color;  // the scene's HDR color (the result is written back into it)
+    FsrImage depth;  // its depth
+    FsrImage mv;     // URP's motion vectors (RG16F, in UV)
+    float jitter_x, jitter_y;      // this frame's subpixel jitter, in image pixels
+    float mv_scale_x, mv_scale_y;  // from URP's vectors to pixels toward the previous frame
     float frame_ms;
-    float sharpness;  // 0: sin el afinado propio de FSR; 0..1
-    bool reset;       // la historia no vale (corte de cámara, cambio de tamaño)
+    float sharpness;  // 0: without FSR's own sharpening; 0..1
+    bool reset;       // the history is invalid (camera cut, size change)
     bool depth_inverted;
-    uint32_t render_w, render_h;  // lo dibujado (arriba a la izquierda de las imágenes)
-    uint32_t out_w, out_h;        // el tamaño al que FSR lo amplía (igual: antialiasing nativo)
-    int version;  // la versión pedida: 0 la que elija el SDK (la mejor para la tarjeta), 4, 3 (3.1) o 2 (2.3)
-    float cam_near, cam_far, cam_fov;  // la cámara del fotograma (exec.c); 0: valores típicos de Unity
+    uint32_t render_w, render_h;  // the drawn part (top left of the images)
+    uint32_t out_w, out_h;        // the size FSR upscales it to (the same: native anti-aliasing)
+    int version;  // the requested version: 0 whichever the SDK picks (the best for the GPU), 4, 3 (3.1) or 2 (2.3)
+    float cam_near, cam_far, cam_fov;  // the frame's camera (exec.c); 0: typical Unity values
 } FsrDispatch;
 
-// (vk_fg.cpp) el SDK que cargó vk_fsr_init: sus funciones (los Pfn* de ffx_api.h) y el dispositivo; NULL sin cargar
+// (vk_fg.cpp) the SDK vk_fsr_init loaded: its functions (the Pfn* from ffx_api.h) and the device; NULL if not loaded
 typedef struct {
     void *create, *destroy, *configure, *query, *dispatch;
     VkPhysicalDevice phys;
@@ -40,21 +40,21 @@ typedef struct {
     PFN_vkGetDeviceProcAddr gdpa;
 } FsrApi;
 const FsrApi *vk_fsr_api(void);
-// La versión del SDK para ese tipo de contexto cuyo nombre empieza por «want.» (4 -> «4.0.2»): un ffxOverrideVersion
-// en override_out; false: la que elija el SDK
+// The SDK version for that context type whose name starts with "want." (4 -> "4.0.2"): an ffxOverrideVersion in
+// override_out; false: whichever the SDK picks
 bool vk_fsr_pick_version(uint64_t create_desc_type, int want, void *override_out);
 
-bool vk_fsr_available(void);  // las DLL del SDK junto al ejecutable
-// (hilo traductor, una vez con el dispositivo creado) carga las DLL; false si no están o no sirven
+bool vk_fsr_available(void);  // the SDK's DLLs next to the executable
+// (translating thread, once, with the device created) loads the DLLs; false if they are missing or unusable
 bool vk_fsr_init(VkPhysicalDevice phys, VkDevice dev, PFN_vkGetDeviceProcAddr gdpa);
-// el desplazamiento subpíxel número `index` de la secuencia de FSR (Halton 2, 3), en píxeles (-0.5..0.5)
+// subpixel jitter number `index` of FSR's sequence (Halton 2, 3), in pixels (-0.5..0.5)
 void vk_fsr_jitter(uint64_t index, uint32_t render_w, uint32_t display_w, float *jx, float *jy);
-void vk_fsr_record(VkCommandBuffer cb, const void *dispatch);  // (hilo grabador) un FsrDispatch
-void vk_fsr_release(void);  // (con la GPU parada) el contexto y su imagen
-// (device.c) la cola del juego: un contexto nuevo espera solo a ella (no vkDeviceWaitIdle: con la generación de
-// fotogramas, la cola de presentación de AMD la usan sus propios hilos)
+void vk_fsr_record(VkCommandBuffer cb, const void *dispatch);  // (recorder thread) an FsrDispatch
+void vk_fsr_release(void);  // (with the GPU idle) the context and its image
+// (device.c) the game queue: a new context waits for it alone (not vkDeviceWaitIdle: with frame generation, AMD's
+// present queue is used by its own threads)
 void vk_fsr_set_queue(VkQueue q);
-const char *vk_fsr_status(void);  // para el menú: versión en uso o por qué no
+const char *vk_fsr_status(void);  // for the menu: version in use or why not
 
 #ifdef __cplusplus
 }

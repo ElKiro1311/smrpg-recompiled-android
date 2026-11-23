@@ -16,11 +16,11 @@
 #include "../texpatch.h"
 
 // ================================================================== formats
-// chan (SMRPG): dónde guarda la imagen de Vulkan los canales de NVN, que en los formatos empaquetados de 16 bits van
-// desde el bit 0 (R primero); Vulkan nombra los suyos desde el bit alto. 0 igual, 1 rojo y azul cambiados, 2 al revés.
+// chan (SMRPG): where the Vulkan image stores NVN's channels, which in the 16-bit packed formats go from bit 0 up (R
+// first); Vulkan names its own from the high bit down. 0 same, 1 red and blue swapped, 2 reversed.
 typedef struct { VkFormat vf; uint8_t expand_rgb, alpha_one, chan; } VkFmt;
 static bool format_supports(VkFormat f, VkFormatFeatureFlags want);
-// (SMRPG) el formato exacto si el dispositivo lo muestrea; si no, el de reserva con su reordenamiento de canales
+// (SMRPG) the exact format if the device samples it; if not, the fallback with its channel reordering
 static VkFmt packed16(VkFormat exact, VkFormat fallback, uint8_t chan, uint8_t alpha_one, int *cache) {
     if (*cache < 0) *cache = format_supports(exact, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT);
     return *cache ? (VkFmt){exact, 0, alpha_one, 0} : (VkFmt){fallback, 0, alpha_one, chan};
@@ -39,8 +39,8 @@ static VkFormat depth24_stencil8(void) {
         VkFormatFeatureFlags want = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
                                     VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
         VkFormatFeatureFlags blits = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
-        // (SMRPG Android) los blits solo cuentan si D32S8 los tiene: en la Adreno ningún formato de profundidad admite
-        // BLIT_DST, y D24S8 —el de la Switch— se filtra en lineal y D32S8 no (la profundidad muestreada salía en cuadros)
+        // (SMRPG Android) blits only count if D32S8 has them: on the Adreno no depth format supports BLIT_DST, and
+        // D24S8 - the Switch's - filters linearly and D32S8 does not (the sampled depth came out blocky)
         bool blits_ok = (p.optimalTilingFeatures & blits) == blits || (p32.optimalTilingFeatures & blits) != blits;
         bool ok = (p.optimalTilingFeatures & want) == want && blits_ok && !(e && !atoi(e));
         f = ok ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -96,12 +96,12 @@ static VkFmt fmt_of(uint32_t f) {
     case 0x36: return (VkFmt){VK_FORMAT_D32_SFLOAT_S8_UINT};
     case 0x37: return (VkFmt){VK_FORMAT_R8G8B8A8_SRGB, 0, 1};
     case 0x38: return (VkFmt){VK_FORMAT_R8G8B8A8_SRGB};
-    // (SMRPG) Los empaquetados de 16 bits de NVN llevan R desde el bit 0 (nxnative rendering.md: «RGBA4 textures in
-    // Metal's channel order», «RGB565-family…»). Con R4G4B4A4 (R en los bits altos) el RGBA4 se leía al revés: el
-    // shadowmask de Mushroom Way (0x0f00, azul 1) daba suelo y follaje casi negros. RGBA4 = A4B4G4R4 (núcleo en 1.3),
-    // RGB565 = B5G6R5; RGB5A1 / RGB5 = A1R5G5B5 con rojo y azul cambiados en la vista (A1B5G5R5 pide maintenance5).
+    // (SMRPG) NVN's 16-bit packed formats have R from bit 0 up (nxnative rendering.md: "RGBA4 textures in Metal's
+    // channel order", "RGB565-family…"). With R4G4B4A4 (R in the high bits) RGBA4 was read backwards: Mushroom Way's
+    // shadowmask (0x0f00, blue 1) made the ground and foliage almost black. RGBA4 = A4B4G4R4 (core in 1.3), RGB565 =
+    // B5G6R5; RGB5A1 / RGB5 = A1R5G5B5 with red and blue swapped in the view (A1B5G5R5 needs maintenance5).
     case 0x39: { static int ok = -1; return packed16(VK_FORMAT_A4B4G4R4_UNORM_PACK16, VK_FORMAT_R4G4B4A4_UNORM_PACK16, 2, 0, &ok); }
-    case 0x3A: return (VkFmt){VK_FORMAT_A1R5G5B5_UNORM_PACK16, 0, 1, 1};  // (RGB5: alfa a uno)
+    case 0x3A: return (VkFmt){VK_FORMAT_A1R5G5B5_UNORM_PACK16, 0, 1, 1};  // (RGB5: alpha set to one)
     case 0x3B: return (VkFmt){VK_FORMAT_A1R5G5B5_UNORM_PACK16, 0, 0, 1};
     case 0x3C: { static int ok = -1; return packed16(VK_FORMAT_B5G6R5_UNORM_PACK16, VK_FORMAT_R5G6B5_UNORM_PACK16, 1, 0, &ok); }
     case 0x3D: return (VkFmt){VK_FORMAT_A2B10G10R10_UNORM_PACK32};
@@ -224,8 +224,8 @@ static bool tex_scalable(const NvnTexture *t) {
     if (off) return false;
     if (t->target != 1 || t->samples > 1 || !(t->flags & 8) || t->width < 32 || t->height < 16) return false;
     float a = (float)t->width / (float)t->height;
-    // 16:9 (1920x1080 and its fractions, 704x396, 60x33...) - (SMRPG) o el aspecto de la pantalla del juego con
-    // «Pantalla ancha» (2580x1080 y sus fracciones: runtime/hle/unity_screen.c)
+    // 16:9 (1920x1080 and its fractions, 704x396, 60x33...) - (SMRPG) or the game screen's aspect ratio with
+    // "Widescreen" (2580x1080 and its fractions: runtime/hle/unity_screen.c)
     extern int g_guest_w, g_guest_h;
     float ga = g_guest_h > 0 ? (float)g_guest_w / (float)g_guest_h : 16.0f / 9.0f;
     if (!(a > 1.74f && a < 1.81f) && !(fabsf(a - ga) < 0.03f * ga)) return false;
@@ -289,7 +289,7 @@ bool renderer_texture_presented(NvnTexture *t) {
 void renderer_texture_scale(NvnTexture *t, float *sx, float *sy) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (b && b->scalable) { *sx = b->sx; *sy = b->sy; }
-    else if (b && b->replaced) { *sx = b->rx; *sy = b->ry; }  // (SMRPG: textura HD, vulkan/texpack.c)
+    else if (b && b->replaced) { *sx = b->rx; *sy = b->ry; }  // (SMRPG: HD texture, vulkan/texpack.c)
     else { *sx = 1; *sy = 1; }
 }
 
@@ -388,14 +388,17 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     VkFormat vf = mf.vf;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
-    // (SMRPG Android) ASTC decodificado en la CPU aunque la GPU diga que lo tiene: con LARECOMP_VK_ASTC_CPU=1, o solo
-    // en el emulador de Android (gfxstream): ahí el ASTC no es de la GPU, lo «emula» el anfitrión, y con lavapipe
-    // las texturas salían negras (la escena sin luz, el HUD sin iconos)
+    // (SMRPG Android) ASTC decoded on the CPU even if the GPU says it has it: with LARECOMP_VK_ASTC_CPU=1, otherwise
+    // only on the Android emulator (gfxstream): there ASTC is not the GPU's, the host "emulates" it, and with lavapipe
+    // the textures came out black (the scene unlit, the HUD without icons)
     static int astc_cpu = -1;
     if (astc_cpu < 0) {
         const char *e = getenv("LARECOMP_VK_ASTC_CPU");
         astc_cpu = e ? atoi(e) != 0 : strstr(g_vk.props.deviceName, "GFXStream") != NULL;
-        if (astc_cpu) LOG("[vk] ASTC: decodificado en la CPU%s\n", e ? " (LARECOMP_VK_ASTC_CPU)" : " (el emulador de Android lo emula y sale negro)");
+        if (astc_cpu) LOG("[vk] ASTC: decoded on the CPU%s\n", e ? " (LARECOMP_VK_ASTC_CPU)" : " (the Android emulator "
+                                                                                                   "emulates it and "
+                                                                                                   "it comes out "
+                                                                                                   "black)");
     }
     if (!format_supports(vf, need) || (astc_cpu && vf >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && vf <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK)) {
         bool astc = vf >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && vf <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK;
@@ -474,10 +477,11 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     // right edge, issue #205; every window resize reallocates these images). Copies into them write only the contents'
     // part, and with LARECOMP_NO_FRAME_CLEAR the per-frame clear is skipped. LARECOMP_NEW_TARGET_FILL=<r>,<g>,<b>,<a>
     // (test): that colour instead of zeros.
-    // (SMRPG Android) Y TODO destino de color nuevo, escalable o no: en la Switch el juego crea sus destinos en memoria
-    // suya, a cero, y cuenta con ello (la textura de 2048x2048 de la lava se dibuja descartando lo que no es lava; la
-    // calima lee el resto); en el PC el controlador da la memoria limpia, pero en la Adreno no (memoria reutilizada y su
-    // compresión UBWC: basura en bloques — la trama de cuadros sobre la lava, la lava plana, las burbujas verdes).
+    // (SMRPG Android) And EVERY new color target, scalable or not: on the Switch the game creates its targets in its
+    // own memory, zeroed, and counts on it (the lava's 2048x2048 texture is drawn discarding whatever is not lava; the
+    // heat haze reads the rest); on PC the driver hands out clean memory, but on the Adreno it does not (reused memory
+    // and its UBWC compression: garbage in blocks - the checkered pattern over the lava, the flat lava, the green
+    // bubbles).
     bool clear_color = !depthfmt && (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     if (depthfmt || clear_color) {
         VkCommandBuffer cb = vk_upload_cmd();
@@ -526,9 +530,9 @@ static void destroy_image(TexBackend *b) {
     b->mem = VK_NULL_HANDLE;
 }
 
-// ---------------------------------------------------------------- (SMRPG) texturas HD (vulkan/texpack.c)
-// Texturas 2D de una capa, en bloques (no lineales: vídeo), que el juego llena (no destinos de render): ASTC (aquí
-// decodificado a RGBA8) o RGBA8.
+// ---------------------------------------------------------------- (SMRPG) HD textures (vulkan/texpack.c)
+// Single-layer 2D textures, block-linear (not linear: video), that the game fills (not render targets): ASTC (decoded
+// here to RGBA8) or RGBA8.
 bool vk_texpack_candidate(NvnTexture *t) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (!b || b->scalable || t->widened || t->target != 1 || b->layers != 1 || b->depth != 1 || b->samples != 1) return false;
@@ -536,8 +540,8 @@ bool vk_texpack_candidate(NvnTexture *t) {
     return b->astc_bw || t->format == 0x25 || t->format == 0x38;
 }
 
-// La imagen de la textura pasa a ser la del PNG (con sus mipmaps si la original los tiene). El formato es el de la
-// imagen actual (RGBA8, sRGB o no): las vistas y los muestreadores no cambian.
+// The texture's image becomes the PNG's (with its mipmaps if the original has them). The format is the current image's
+// (RGBA8, sRGB or not): the views and samplers do not change.
 bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (!b || (b->format != VK_FORMAT_R8G8B8A8_UNORM && b->format != VK_FORMAT_R8G8B8A8_SRGB)) return false;
@@ -548,7 +552,7 @@ bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
     if (W < t->width || H < t->height || W > 16384 || H > 16384 || ra / ga > 1.02 || ra / ga < 0.98) {
         static int nlog;
         if (nlog++ < 20)
-            LOG("[texturas] %s: %ux%u no vale para una textura de %ux%u (proporciones distintas o más pequeña)\n", path, W, H,
+            LOG("[textures] %s: %ux%u does not fit a %ux%u texture (different proportions, or smaller)\n", path, W, H,
                 t->width, t->height);
         free(px);
         return false;
@@ -564,7 +568,7 @@ bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
     VkImage img;
     VmaAllocation mem;
     if (vmaCreateImage(g_vk.vma, &ci, &ai, &img, &mem, NULL) != VK_SUCCESS) {
-        LOG("[texturas] sin memoria para %s (%ux%u)\n", path, W, H);
+        LOG("[textures] no memory for %s (%ux%u)\n", path, W, H);
         free(px);
         return false;
     }
@@ -576,7 +580,7 @@ bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
     VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = W, .bufferImageHeight = H,
                             .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {W, H, 1}};
     rec_CmdCopyBufferToImage(cb, s.buf, img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
-    for (uint32_t lv = 1; lv < levels; lv++) {  // los mipmaps, cada uno del anterior
+    for (uint32_t lv = 1; lv < levels; lv++) {  // the mipmaps, each from the previous one
         vk_full_barrier(cb);
         int32_t sw = (int32_t)(W >> (lv - 1)), sh = (int32_t)(H >> (lv - 1)), dw = (int32_t)(W >> lv), dh = (int32_t)(H >> lv);
         VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv - 1, 0, 1},
@@ -586,7 +590,7 @@ bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
         rec_CmdBlitImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, img, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
     }
     vk_full_barrier(cb);
-    destroy_image(b);  // (las vistas se olvidan; la imagen vieja se destruye cuando acaben sus entregas)
+    destroy_image(b);  // (the views are forgotten; the old image is destroyed when its submissions complete)
     b->image = img;
     b->mem = mem;
     b->width = W;
@@ -597,11 +601,11 @@ bool vk_texpack_replace(NvnTexture *t, uint64_t key, const char *path) {
     b->rx = (float)W / (float)t->width;
     b->ry = (float)H / (float)t->height;
     static int nlog;
-    if (nlog++ < 200) LOG("[texturas] %016llx %ux%u -> %ux%u (%s)\n", (unsigned long long)key, t->width, t->height, W, H, path);
+    if (nlog++ < 200) LOG("[textures] %016llx %ux%u -> %ux%u (%s)\n", (unsigned long long)key, t->width, t->height, W, H, path);
     return true;
 }
 
-// Otra vez la imagen del juego (el juego puso otros datos en la textura).
+// The game's image again (the game put other data in the texture).
 void vk_texpack_unreplace(NvnTexture *t) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (!b || !b->replaced) return;
@@ -627,18 +631,18 @@ static void live_remove(TexBackend *b) {
     b->reg = 0;
 }
 
-// (SMRPG) Las texturas de pantalla (t->screen, objects.c: las de ventana de Unity y la profundidad de su backbuffer)
-// miden lo que la pantalla del juego. Si cambia en marcha (la ventana pasó a 21:9 o volvió a 16:9:
-// runtime/hle/unity_screen.c rt_unity_screen_follow), su imagen se rehace a la nueva medida en su siguiente uso. No hay
-// nada que conservar: solo las dibuja la GPU, entera en cada imagen. (Su memoria del juego es la de 1920x1080: nunca
-// se sube desde ella, t->widened.)
+// (SMRPG) The screen textures (t->screen, objects.c: Unity's window ones and its backbuffer's depth) are the size of
+// the game's screen. If that changes at runtime (the window went to 21:9 or back to 16:9: runtime/hle/unity_screen.c
+// rt_unity_screen_follow), their image is recreated at the new size on its next use. There is nothing to preserve: only
+// the GPU draws them, in full every frame. (Their game memory is 1920x1080's: they are never uploaded from it,
+// t->widened.)
 static bool screen_follow(NvnTexture *t) {
     extern int g_guest_w, g_guest_h;
     uint32_t w = (uint32_t)g_guest_w, h = (uint32_t)g_guest_h;
     if (!t->screen || !w || !h || (t->width == w && t->height == h)) return false;
     static int nlog;
     if (nlog++ < 16)
-        LOG("[vk] textura de pantalla n.º %llu: %ux%u -> %ux%u (la pantalla del juego cambió)\n",
+        LOG("[vk] screen texture no. %llu: %ux%u -> %ux%u (the game's screen changed)\n",
             (unsigned long long)t->debug_id, t->width, t->height, w, h);
     t->width = t->layout.width = w;
     t->height = t->layout.height = h;
@@ -679,10 +683,10 @@ void backend_texture_destroyed(NvnTexture *t) {
     t->backend = NULL;
 }
 
-// (SMRPG) La memoria de vídeo de las texturas del juego por clase, para el medidor del menú (runtime/ui/perf_meter.c):
-// [0] los destinos de render a la resolución interna (escalables: crecen con ella y con el supersampling), [1] las texturas
-// HD (sustituidas por las de texturas/, vulkan/texpack.c), [2] el resto. Recorre las vivas en el hilo del render (el de
-// su creación y destrucción; el menú se dibuja ahí).
+// (SMRPG) The video memory of the game's textures by class, for the menu's meter (runtime/ui/perf_meter.c): [0] the
+// render targets at the internal resolution (scalable: they grow with it and with supersampling), [1] the HD textures
+// (replaced by the ones in textures/, vulkan/texpack.c), [2] the rest. Walks the live ones on the render thread (the
+// one that creates and destroys them; the menu is drawn there).
 void vk_vram_by_kind(uint64_t out[3]) {
     out[0] = out[1] = out[2] = 0;
     for (int i = 0; i < g_nlive; i++) {
@@ -745,9 +749,9 @@ static void upload_pending(TexBackend *b) {
     if (nv12) { vk_convert_nv12(b, px, w, h, stride, uv_off); free(px); return; }
     VkCommandBuffer cb = vk_upload_cmd();
     if (b->scalable && (w != b->width || h != b->height)) {
-        // (SMRPG) Una textura escalada (la del vídeo, a más o menos de 1x) no tiene el tamaño del vídeo: copiado 1:1,
-        // quedaba en la esquina (encogido) o recortado. Se sube a una imagen temporal de su tamaño y se amplía o reduce con
-        // un blit a toda la textura, que dice que su contenido la llena (como vk_convert_nv12).
+        // (SMRPG) A scaled texture (the video's, above or below 1x) is not the size of the video: copied 1:1, it ended
+        // up in the corner (shrunken) or cropped. It is uploaded to a temporary image of its size and scaled up or down
+        // with a blit to the whole texture, which says its contents fill it (like vk_convert_nv12).
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = b->format,
                                 .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
                                 .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -768,7 +772,7 @@ static void upload_pending(TexBackend *b) {
                               .dstOffsets = {{0, 0, 0}, {(int32_t)b->width, (int32_t)b->height, 1}}};
             rec_CmdBlitImage(cb, tmp, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
             vk_full_barrier(cb);
-            vk_defer_image(tmp, tmem);  // (destruida cuando la entrega acabe)
+            vk_defer_image(tmp, tmem);  // (destroyed when the submission completes)
             b->sx = b->ax, b->sy = b->ay;
             return;
         }
@@ -853,9 +857,9 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint64_t layer_size = tegra_layer_size(&t->layout);
     bool linear = (t->flags & 0x10) != 0;
     uint32_t levels = t->layout.levels < b->levels ? t->layout.levels : b->levels;
-    // (SMRPG) texturas HD (vulkan/texpack.c): la huella del nivel 0 decide si la imagen es la de un PNG de la carpeta
-    // de texturas (y si hay que volcarla). Con la misma huella que ya sustituye, no se sube nada; con otra, vuelve la
-    // imagen del juego.
+    // (SMRPG) HD textures (vulkan/texpack.c): the hash of level 0 decides whether the image is that of a PNG from the
+    // textures folder (and whether to dump it). With the same hash it already replaces, nothing is uploaded; with
+    // another one, the game's image comes back.
     uint64_t dkey = 0;
     if (texpack_active() && vk_texpack_candidate(t)) {
         LevelLayout l0 = tegra_level(&t->layout, 0);
@@ -869,7 +873,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             const char *rp = texpack_lookup(key);
             if (rp && vk_texpack_replace(t, key, rp)) { free(lin0); return; }
             if (!b->astc_bw && fi->bpb == 4 && fi->bw == 1) texpack_dump_rgba(key, lin0, l0.w, l0.h, t->format);
-            else dkey = key;  // (ASTC: se vuelca lo decodificado, abajo)
+            else dkey = key;  // (ASTC: the decoded data is dumped, below)
             free(lin0);
         }
     } else if (b->replaced) {
@@ -887,7 +891,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
                 astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
                 free(blocks);
-                if (dkey && layer == 0 && lv == 0) {  // (SMRPG: volcado; s.ptr es memoria de subida, se copia antes)
+                if (dkey && layer == 0 && lv == 0) {  // (SMRPG: dump; s.ptr is upload memory, copied first)
                     uint8_t *cp = malloc((size_t)l.w * l.h * 4);
                     if (cp) { memcpy(cp, s.ptr, (size_t)l.w * l.h * 4); texpack_dump_rgba(dkey, cp, l.w, l.h, t->format); free(cp); }
                 }
@@ -939,7 +943,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
     if (b->pending_rgba) upload_pending(b);
-    if (for_render || t->widened) b->gpu_owned = true;  // (SMRPG: widened, objects.c: su memoria es más pequeña)
+    if (for_render || t->widened) b->gpu_owned = true;  // (SMRPG: widened, objects.c: its memory is smaller)
     else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
@@ -1168,7 +1172,8 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
         if (!set) for (int i = 0; i < 4; i++) c[i] = (uint8_t)(2 + i);
         if (mf.alpha_one)
             for (int i = 0; i < 4; i++) if (c[i] == 5) c[i] = 1;
-        // (SMRPG) el canal de NVN está en otro de la imagen (VkFmt.chan): 1 rojo <-> azul, 2 r g b a <-> a b g r
+        // (SMRPG) the NVN channel is in a different one of the image's channels (VkFmt.chan): 1 red <-> blue, 2 r g b a
+        // <-> a b g r
         for (int i = 0; i < 4 && mf.chan; i++)
             if (c[i] >= 2) c[i] = mf.chan == 1 ? (c[i] == 2 ? 4 : c[i] == 4 ? 2 : c[i]) : (uint8_t)(7 - c[i]);
         // NVN swizzle 0 zero, 1 one, 2..5 r,g,b,a == VkComponentSwizzle - 1
@@ -1342,8 +1347,9 @@ static VkCompareOp compare_op(uint32_t f) {
     }
 }
 
-// (SMRPG) el filtrado anisótropo forzado de los ajustes: un muestreador creado con otro valor se rehace (el viejo se
-// deja: puede estar en órdenes en vuelo; solo pasa al cambiar el ajuste). nearest (SMRPG Android): el mismo sin filtrar.
+// (SMRPG) the forced anisotropic filtering from the settings: a sampler created with a different value is recreated
+// (the old one is kept: it may be in commands in flight; this only happens when the setting changes). nearest (SMRPG
+// Android): the same one unfiltered.
 static VkSampler sampler_make(NvnSamplerDesc *d, bool nearest) {
     extern int settings_aniso(void), settings_tex_detail(void);
     int af = settings_aniso(), detail = settings_tex_detail();
@@ -1371,13 +1377,14 @@ static VkSampler sampler_make(NvnSamplerDesc *d, bool nearest) {
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }
-    // (SMRPG) solo con filtro lineal y mipmaps (3 LINEAR_MIPMAP_NEAREST, 5 LINEAR_MIPMAP_LINEAR), no en los de sombras
+    // (SMRPG) only with linear filtering and mipmaps (3 LINEAR_MIPMAP_NEAREST, 5 LINEAR_MIPMAP_LINEAR), not on the
+    // shadow ones
     float dev_af = g_vk.props.limits.maxSamplerAnisotropy;
     if (af > 1 && (mf == 3 || mf == 5) && !d->compare_mode && dev_af > 1) {
         float want = fminf((float)af, dev_af);
         if (!si.anisotropyEnable || si.maxAnisotropy < want) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = want; }
     }
-    // (SMRPG) «Detalle de texturas»: un nivel de mipmap más fino (sesgo -0.5 / -1) en los muestreadores con mipmaps
+    // (SMRPG) "Texture detail": a finer mipmap level (bias -0.5 / -1) on samplers with mipmaps
     if (detail > 0 && mf >= 2 && !d->compare_mode) si.mipLodBias -= 0.5f * (float)detail;
     static float lodmin = -1;
     if (lodmin < 0) lodmin = getenv("LARECOMP_LOD_MIN") ? (float)atof(getenv("LARECOMP_LOD_MIN")) : 0;
@@ -1401,7 +1408,7 @@ static VkSampler sampler_make(NvnSamplerDesc *d, bool nearest) {
             si.pNext = &cb;
         } else si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     }
-    if (nearest) {  // (para formatos que la GPU no filtra en lineal: con LINEAR, Vulkan no define el resultado)
+    if (nearest) {  // (for formats the GPU does not filter linearly: with LINEAR, Vulkan leaves the result undefined)
         si.magFilter = si.minFilter = VK_FILTER_NEAREST;
         si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         si.anisotropyEnable = VK_FALSE;
@@ -1413,7 +1420,7 @@ static VkSampler sampler_make(NvnSamplerDesc *d, bool nearest) {
 
 VkSampler vk_sampler(NvnSamplerDesc *d) {
     extern int settings_aniso(void), settings_tex_detail(void);
-    int key = settings_aniso() | (settings_tex_detail() << 8);  // (con lo que se hizo: backend_af)
+    int key = settings_aniso() | (settings_tex_detail() << 8);  // (what it was made with: backend_af)
     if (d->backend && d->backend_af == key) return (VkSampler)d->backend;
     VkSampler s = sampler_make(d, false);
     d->backend = (void *)s;
@@ -1421,9 +1428,9 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     return s;
 }
 
-// (SMRPG Android) El muestreador de d sin filtrar, para una textura de un formato que la GPU no filtra en lineal (las
-// Adreno: los de coma flotante de 32 bits, D16, D32F y D32F_S8). Se guarda en una tabla aparte, por el muestreador de
-// d: NvnSamplerDesc vive dentro del NVNsamplerBuilder del juego, de tamaño fijo, y no admite más campos.
+// (SMRPG Android) d's sampler unfiltered, for a texture in a format the GPU does not filter linearly (on Adreno: the
+// 32-bit float ones, D16, D32F and D32F_S8). It is kept in a separate table, keyed by d's sampler: NvnSamplerDesc lives
+// inside the game's NVNsamplerBuilder, which has a fixed size, and cannot take more fields.
 VkSampler vk_sampler_nearest(NvnSamplerDesc *d) {
     VkSampler base = vk_sampler(d);
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -1436,12 +1443,12 @@ VkSampler vk_sampler_nearest(NvnSamplerDesc *d) {
         if (!map[i].base) { near = map[i].near = sampler_make(d, true); map[i].base = base; break; }
     }
     pthread_mutex_unlock(&mu);
-    return near ? near : base;  // (la tabla llena: el de siempre)
+    return near ? near : base;  // (table full: the usual one)
 }
 
-// ¿Filtra la GPU este formato en lineal? (los de extensiones, más allá de 255, se dan por buenos)
+// Does the GPU filter this format linearly? (extension formats, beyond 255, are assumed fine)
 bool vk_format_linear_ok(VkFormat f) {
-    static int8_t cache[256];  // (0: sin mirar, 1: sí, -1: no)
+    static int8_t cache[256];  // (0: not checked, 1: yes, -1: no)
     if ((unsigned)f >= 256) return true;
     if (!cache[f]) {
         VkFormatProperties p;
@@ -1451,7 +1458,7 @@ bool vk_format_linear_ok(VkFormat f) {
     return cache[f] > 0;
 }
 
-// ¿Filtra d en lineal? (aumento lineal, o reducción LINEAR / *_MIPMAP_LINEAR / LINEAR_MIPMAP_*)
+// Does d filter linearly? (linear magnification, or LINEAR / *_MIPMAP_LINEAR / LINEAR_MIPMAP_* minification)
 bool vk_sampler_desc_linear(const NvnSamplerDesc *d) {
     uint32_t mf = d->min_filter;
     return d->mag_filter == 1 || mf == 1 || mf == 3 || mf == 4 || mf == 5;
