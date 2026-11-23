@@ -291,11 +291,12 @@
  "Idioma del juego"},
 {"The language of the game's text (menus, dialogue) and of this menu. The game's own text changes the next time it "
  "opens: \"Restart the game\", at the end of this tab, does it now.",
- "El idioma de los textos del juego (menús, diálogos). Se aplica al volver a abrir el juego: «Reiniciar el juego», "
- "al final de esta pestaña, lo hace ahora."},
+ "El idioma de los textos del juego (menús, diálogos) y de este menú. Los del juego cambian la próxima vez que se "
+ "abra: «Reiniciar el juego», al final de esta pestaña, lo hace ahora."},
 {"The language of the game's text (menus, dialogue) and of this menu. The game's own text changes the next time it "
  "opens.",
- "El idioma de los textos del juego (menús, diálogos). Se aplica al volver a abrir el juego."},
+ "El idioma de los textos del juego (menús, diálogos) y de este menú. Los del juego cambian la próxima vez que se "
+ "abra."},
 {"Borderless",
  "Ventana sin bordes"},
 {"Display mode",
