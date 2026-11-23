@@ -1,0 +1,65 @@
+# your own game files and what's made from them (building from source puts them here)
+input/
+extracted/
+generated/
+generated-*/
+/rando/
+# Nintendo fonts (users import their own; only the README ships)
+/fonts/*
+!/fonts/README.md
+# build output, caches, saves and settings
+build/
+/cache/
+save/
+/larecomp.ini
+/gamecontrollerdb.txt
+# tools and Python environments (machine-specific)
+tools/venv/
+venv/
+__pycache__/
+.DS_Store
+
+# ---- port de Super Mario RPG: lo local que no se sube ----
+# las rutas de las herramientas de cada PC (SDK de Android, JDK...: ver local.env.ejemplo)
+/local.env
+# el enlace a la carpeta con el volcado del juego (exefs/romfs)
+/extracted
+# volcados y desensamblados del código del juego, y pruebas sueltas
+/plt_calls.txt
+/thunks.txt
+/thunk_bl.txt
+/init_array.txt
+/dis_alloc.bin
+/probe_*.py
+/test_ver.c
+/test_ver.exe
+# binarios y ELF convertidos para Ghidra (son código del juego)
+*.elf
+*.nso
+realesrgan/
+
+# ---- red de seguridad: nada del juego, ni llaves, ni programas de pago, ni rutas de nadie ----
+# (las texturas que vuelca el juego, y sus versiones HD, son del juego)
+/texturas/
+/texturas-volcadas/
+# copias del juego y llaves de consola
+*.xci
+*.xcz
+*.nsp
+*.nsz
+*.nca
+*.tik
+*.keys
+# salidas de Il2CppDumper y de Ghidra (sacadas del código del juego)
+dump.cs
+script.json
+il2cpp.h
+stringliteral.json
+*.gzf
+# programas de pago o con su propia licencia de redistribución (van aparte: ver third_party/amd-fsr/LEEME.txt)
+Lossless*.dll
+amd_fidelityfx_*.dll
+# registros y pruebas
+/lasrecomp*.log
+/tools/android/lsfg-thor/
+/tools/android/partida-prueba-*/

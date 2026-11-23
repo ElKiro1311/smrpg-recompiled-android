@@ -1,0 +1,9 @@
+Snapdragon Game Super Resolution (Snapdragon GSR, SGSR), de Qualcomm Snapdragon Game Studios.
+Código abierto con licencia BSD de 3 cláusulas (LICENSE.txt). Origen: https://github.com/SnapdragonStudios/snapdragon-gsr
+(commit d926f07, 2025-10-16).
+
+Lo que usa el port (sus sombreadores, adaptados a las convenciones del runtime y escritos dentro del código):
+  - SGSR 1 (sgsr/v1/include/glsl/sgsr1_shader_mobile.frag): «Escalado: Snapdragon GSR 1» del menú,
+    runtime/nvn/vulkan/shaders.c («sgsr1.frag») y exec.c post_process. Modo RGBA, umbral de borde 8/255, nitidez 2.
+  - SGSR 2 (sus sombreadores de conversión y escalado, sgsr2_convert y sgsr2_upscale): «Antialiasing: Snapdragon GSR 2»
+    del menú, runtime/nvn/vulkan/shaders.c y exec.c (gsr2_dispatch).

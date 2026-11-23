@@ -1,0 +1,4 @@
+lsfg-vk-android (GameNative, https://github.com/GameNative/lsfg-vk-android, rama release, commit 437208a), MIT:
+LICENSE.md. tools/lsfg/lsfg_smrpg.cpp trae de su capa la tabla de recursos de extract.cpp, la traducción de trans.cpp y
+el sombreador de mipmaps (mipmaps_replacement); el resto de su código no está en este repositorio: tools/lsfg/build.sh
+lo compila desde un clon aparte (../deps/src/lsfg-vk-android, o LSFG_SRC).

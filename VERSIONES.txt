@@ -1,0 +1,867 @@
+VERSIONES DEL PORT DE SUPER MARIO RPG (smrpg-recomp)
+====================================================
+La más nueva va arriba. Cada cambio publicado es una versión nueva, con su etiqueta y su release en GitHub (en el
+repositorio público, desde la 0.51.0-beta: las de antes solo están aquí, descritas).
+
+Numeración (desde la 0.45.1-beta): x.y.z-alfa / x.y.z-beta, Semantic Versioning 2.0.0 (semver.org):
+  - z, parche: solo arreglos, nada nuevo ni que cambie cómo se usa (0.45.0 -> 0.45.1);
+  - y, menor: algo nuevo, sin romper lo que había (0.45.1 -> 0.46.0; el parche vuelve a 0);
+  - x, mayor: algo que rompe lo de antes (guardados, ajustes o archivos que dejan de valer, algo que se quita); con 0.x
+    (desarrollo) también sube la y. La 1.0.0 será la primera versión acabada y estable, sin sufijo.
+  - el sufijo, la madurez: alfa mientras no se podía jugar (hasta la 0.20.0), beta desde que se juega entera (0.21.0).
+Las versiones de antes se llamaban v0 a v45: la vN es la 0.N.0 (alfa hasta la 20, beta desde la 21).
+
+0.48.0-beta (2026-11-17) — el instalador construye el código del juego en un solo proceso, en cualquier PC
+  1. Todo dentro del instalador, sin procesos hijos (la 0.47.0 lanzaba smrpg-recomp.exe --build-game, que lanzaba el
+     generador congelado y un zig.exe por archivo: ~30 procesos a la vez). Ahora carga construir\construir.dll
+     (tools/instalador/construir.cpp), que trabaja con hilos:
+     - el generador (tools/gen.py, el mismo) en un Python embebido: python312.dll de la distribución «embeddable» de
+       python.org 3.12.10 (sha256 fijado; firmada por la PSF), aislada con python312._pth (no mira el Python ni las
+       variables del PC), con capstone, unicorn y lz4; sdk y después main, mientras se compila lo que ya salió;
+     - clang 23.1.5 como biblioteca (libclang-cpp y libLLVM de MSYS2) compila los 1.056 archivos en un grupo de hilos,
+       con la misma línea -cc1 que `make`;
+     - lld como biblioteca (su controlador MinGW) enlaza lasgame.dll con la línea de enlace de `make` (game_overrides.o
+       antes que el código generado, --allow-multiple-definition).
+     Comprobado: el C generado es idéntico byte a byte al de `make gen` (871 + 184 archivos) y los 1.056 objetos, a los
+     de `make` salvo los 4 bytes de la hora en la cabecera COFF. Durante toda la instalación hay un solo proceso, el
+     instalador (22 hilos como mucho, ningún proceso hijo: vigilado cada 3 s durante instalaciones enteras).
+  2. Lo que hace falta va con él, en construir\ (316 MB): construir.dll; LLVM, clang y lld (las DLL de MSYS2 y las que
+     cargan); el Python embebido con el generador; las cabeceras de clang (enteras) y, de las de MinGW-w64, las 22 que
+     incluye el código del juego (sacadas con clang -MD para x86-64-v3, -v2 y x86-64, y comprobadas compilando solo con
+     ellas); el CRT de MinGW-w64 y libgcc para enlazar (tools/instalador/herramientas.sh). Del PC solo hace falta
+     Windows 10 u 11 de 64 bits. Ya no van zig ni lasgen.
+  3. Cualquier CPU x86-64: el código del juego se compila para x86-64-v3 (AVX2, FMA, BMI2..., como `make`) si la CPU lo
+     tiene (CPUID, con XGETBV para los registros YMM); si no, para x86-64-v2 o x86-64. lasgame.dll.cpu lo apunta.
+     smrpg-recomp.exe ya no exige AVX2 al arrancar (el programa en sí es x86-64 básico) y, al cargar la biblioteca,
+     comprueba que esta CPU la puede ejecutar (una etiqueta que no conoce, tampoco): si la carpeta se llevó a otro PC,
+     pide volver a ejecutar el instalador. Comprobado con SMRPG_CONSTRUIR_CPU=x86-64-v2 (como en una CPU sin AVX2): sus
+     objetos no tienen ni una instrucción VEX, FMA ni BMI2 (contadas: las de x86-64-v3 llevan miles) y el juego llega
+     igual hasta el combate del Paratroopa. Sin FMA, cada multiplicación-suma del juego pasa por fma() de Windows
+     (ucrtbase): con su camino sin FMA3 (_set_FMA3_enable(0)) redondea exactamente igual que la instrucción en 20
+     millones de casos, también los de cancelación (así que el juego calcula lo mismo), pero más despacio (84 frente a
+     16 ns por pareja fma/fmaf). El código del juego solo usa funciones internas genéricas del compilador (vectores,
+     bswap, clz...): también compila para x86-64 sin SSE4. Sin probar en una CPU sin AVX2 de verdad (ni las DLL de AMD
+     FSR, que apenas usan AVX y miran la CPU con CPUID).
+  4. Lo que salió al probarlo (con gdb):
+     - la pila: clang y LLVM recursan muy hondo en las funciones enormes del código generado
+       (MemorySSAUpdater::recursePhi); con los 2 MB de un hilo normal, el proceso caía sin aviso hacia la mitad
+       (0xC00000FD). El clang.exe de MSYS2 corre con 16 MB y zig con 46: los hilos del constructor reservan 64 MB (solo
+       espacio de direcciones) y van con prioridad por debajo de lo normal, para que el PC siga respondiendo;
+     - el CrashRecoveryContext de LLVM (en MinGW, un manejador de excepciones para todo el proceso) se desactivaba entero
+       con los fallos de acceso que unicorn provoca y recoge a propósito. Ahora hay una red propia, solo en los hilos de
+       compilación: un fallo dentro de clang, o un error grave de LLVM (que llamaría a exit y cerraría el instalador), se
+       convierte en un error de ese archivo. El de LLVM se enciende solo durante el enlace, donde lld lo necesita (ante un
+       error grave, lld llama a exit);
+     - el proceso se quedaba colgado al salir: el grupo de hilos de lld (llvm::parallel) seguía vivo y su destructor
+       estático esperaba a hilos que Windows ya había matado. lld enlaza con --threads=1 (0,6 s) y, por si acaso, el
+       instalador termina en seco si llegó a cargar el constructor (sus registros van sin búfer).
+  5. Cancelar vuelve enseguida: los hilos terminan por su cuenta el archivo que tenían entre manos (el más grande tarda
+     ~3 min) y volver a instalar los espera. Cerrar la ventana cierra el proceso entero.
+  6. Lo ya construido se reutiliza si no cambian ni el juego, ni el generador, ni la forma de compilar (base.txt: sin
+     rutas, mover la carpeta no lo invalida; con el contenido de las cabeceras de clang y de MinGW-w64).
+  7. Actualizar una 0.47 (su LEEME.txt lo dice, mirado antes de copiar nada): quita, por nombre, los 98 archivos de su
+     lasgen\ y su zig\ y dos licencias que ya no van, y después esas carpetas si se quedan vacías (lo que no sea suyo se
+     queda; nada dentro de un enlace); la caché de zig (extracted\.gamebuild) también; y compila una vez todo con el
+     constructor nuevo.
+  8. Licencias: LLVM, clang y lld (Apache 2.0 con las excepciones de LLVM), libffi, libxml2, zlib, el Python embebido y
+     sus bibliotecas, las cabeceras y el CRT de MinGW-w64, libgcc y crtbegin/crtend; el aviso BSD-2 de la biblioteca LZ4
+     que llevan dentro los enlaces de Python (de su código fuente de PyPI, comprobado por sha256); MSYS2-fuentes.txt con
+     el paquete fuente exacto de MSYS2 de todo lo que sale de ahí; el código fuente de Unicorn (GPL 2, ahora dentro del
+     proceso del instalador) y el del instalador y su constructor con su Makefile, en licencias\fuentes (y `make`
+     comprueba que en esas fuentes no van rutas de este PC). Sin unzip: herramientas.sh y licencias.sh abren los zip con
+     el Python de build/gen-venv.
+  9. Revisión antes de publicar (2 revisores, solo lectura; los hallazgos, comprobados por mí): 21, todos arreglados
+     salvo dos residuos menores (abajo):
+     - Control Flow Guard (#337 de LAS Recomp): si Windows lo impone a todos los programas, unicorn hacía caer el
+       instalador de golpe (reproducido con CFG forzado por la directiva del proceso: 0xC0000409 en cuanto empieza a
+       generar). Ahora el instalador lo ve al abrirse y se vuelve a abrir a sí mismo con CFG apagado por la directiva de
+       creación del proceso (Get-ProcessMitigation: CFG activado en el primero, desactivado en el que trabaja), que
+       instala bien; si no pudiera, lo explica en vez de construir. El constructor también se niega con un mensaje;
+     - la red, probada a propósito (SMRPG_CONSTRUIR_PRUEBA_FALLO=<trozo>:1 o :2): un acceso a la dirección 0 y agotar
+       la pila de un hilo de 64 MB, dentro de la compilación de un trozo, salen como error de ese trozo y el proceso
+       sigue; después, el proceso queda marcado y volver a construir pide reabrir el instalador (lo compilado se
+       guarda), porque lo que clang tenía a medias, y quizá un cerrojo, se quedó así; esperar a lo de la vez anterior
+       tiene un tope de 20 min;
+     - sin memoria: un `new` sin memoria terminaba con abort sin decir nada; ahora es un error del trozo (y std::terminate
+       deja una línea en el registro). Los hilos de compilación se limitan también por la memoria libre (2 por GB);
+     - el número de trozos lo lee el hilo del generador de su registro entero al acabar (antes de dar el módulo por
+       hecho), y el registro no se lee hasta que el generador empieza (si el de la vez anterior no se deja borrar, va
+       con otro nombre): ni la tabla podía salir antes que un trozo ni se podía leer una cuenta vieja. gen.key lo
+       escribe el generador al acabar: cancelar mientras se compila ya no obliga a volver a generar (comprobado: cancelar
+       a los 15 s, en plena generación, y la vuelta siguiente reutiliza lo generado);
+     - un objeto estropeado (un apagón puede dejarlo renombrado y lleno de ceros) ya no se reutiliza (su cabecera COFF
+       se mira); si el enlace falla, lo guardado se descarta y la vez siguiente se rehace todo; su .src se borra antes de
+       compilarlo; el renombrado se reintenta (un antivirus) y su fallo se explica; si el hash de Windows
+       falla, ningún hash coincide; sin .cpu mientras se cambia la biblioteca (se exige lo más alto);
+     - Python aislado también de las variables del PC (Py_IgnoreEnvironmentFlag, Py_IsolatedFlag,
+       Py_NoUserSiteDirectory) y, antes de arrancarlo, se mira que estén python312.zip, ._pth y vcruntime140.dll (sin
+       ellos, Python llama a abort);
+     - reintentar en la misma sesión: lo de construir\ que ya está cargado se deja si está entero (antes decía «¿está el
+       juego abierto?»), lo que falte se escribe; cancelar justo antes de construir ya no arranca el generador; acabar
+       bien aunque la cancelación llegue en el enlace cuenta como bien; si construir_juego no está, error en vez de
+       llamar a nada; si otra DLL con el nombre de una de las suyas ya está cargada (una extensión del Explorador), el
+       mensaje la nombra; SMRPG_CONSTRUIR_CPU solo admite los tres niveles; GetLastError intacto en el manejador; los
+       temporales de `make` fuera de lo que se reparte, que solo admite lo esperado.
+     Quedan, por si acaso: durante el enlace (0,6 s), una excepción en otro hilo apagaría el CrashRecoveryContext de
+     LLVM, y un error grave de lld entonces cerraría el instalador; y clang, si su analizador se queda sin pila, sigue en
+     un hilo propio de 8 MB sin la red (el C generado es plano: no pasa).
+  Medido en un Ryzen 7 9800X3D (16 hilos, 64 GB): instalación entera 12 min 42 s, en una carpeta con «ñ» y tildes
+  (construir: 756 s; memoria máxima del proceso 4,6 GB); actualizar una 0.47 (se compila todo una vez): ~13-15 min;
+  actualizar encima de una 0.48: 3 s. Instalador: 113,6 MB (la 0.47.0: 98 MB). Windows Defender: sin amenazas.
+  Comprobado jugando (oculto) en las tres: título, Mushroom Way y el combate contra el Paratroopa.
+  Prueba suelta del constructor: tools/instalador/probar_construir.c (también cancelar y volver a construir).
+
+0.47.0-beta (2026-11-16) — instalador: el port desde tu propia copia del juego, sin nada del juego dentro
+  1. SMRPG-Recomp-Instalador-<versión>.exe (tools/instalador, `make instalador`): una ventana con tu copia del juego
+     (versión 1.0.0) y la carpeta de instalación. Instalar:
+     - copia el programa que lleva dentro (zstd al final del .exe): el ejecutable release, sus DLL, el generador lasgen
+       congelado, zig adelgazado, gamelib-src (con tools/game_overrides.c), las DLL de AMD FSR, fuentes y licencias;
+     - pone los archivos de tu copia en extracted/exefs y extracted/romfs; exefs/main debe ser la 1.0.0 (build
+       e968832c...). Cada archivo como .part que se renombra al acabar: si se corta, se reanuda (desde la 0.51.0-beta,
+       la copia se elige ya extraída: ver esa versión en el VERSIONES.txt de main);
+     - construye el código del juego en ese PC: smrpg-recomp.exe --build-game <carpeta>\extracted (runtime/main.c),
+       gamebuild_run de LAS Recomp con su avance por la salida estándar (el registro del programa, construccion.log);
+       medido en un Ryzen 7 9800X3D (16 hilos): 1.056 archivos de C en 11 min (el generador, 1 min; la función más
+       grande, main_189.c, 3 min), lasgame.dll de 265 MB, con las mismas 154.122 + 39.483 funciones que la de `make`.
+       Instalación entera: 11 min; actualizar encima (lo compilado se reutiliza): 46 s;
+     - crea los accesos directos (escritorio y menú Inicio) a smrpg-recomp.exe --play.
+     Comprueba antes la carpeta (escribible, como mucho 110 caracteres: la ruta más larga de la RomFS son 137 y el
+     programa no usa rutas largas; ~11 GB libres). Instalar encima actualiza: save/ y larecomp.ini se quedan. Registro:
+     instalacion.log. Pruebas sin ventana: --destino/--sin-accesos/--auto/--oculto, --captura <bmp>; SMRPG_INSTALADOR_ACCESOS=<carpeta> deja ahí los accesos directos.
+     Antes de tocar una instalación anterior comprueba que el juego no esté abierto y la versión de tu copia (todo antes
+     de escribir): si algo falla, la instalación que funcionaba sigue igual. Avisa con claridad de: otra versión del
+     juego, una copia incompleta, el juego abierto.
+     Comprobado con la copia instalada (oculta): el título, la partida nueva (elegir dificultad, la película de
+     apertura) y, con una partida copiada, Mushroom Way y el combate contra el Paratroopa, con las sustituciones de
+     game_overrides.c activas ([unity] pantalla del juego, [combate]). Windows Defender: sin amenazas.
+     Revisión antes de publicar (2 revisores + 2 verificadores, solo lectura): 15 hallazgos, 12 confirmados, 1
+     plausible y 2 refutados, todos arreglados: la ventana se ajusta al DPI de su monitor (con el del sistema, en un
+     monitor al 150 % se salían «Examinar…» e «Instalar»), el orden de arriba, el juego abierto (antes salía «el
+     instalador está dañado»), el texto final según los accesos directos creados, mensajes de error vacíos, Cancelar sin cuadro de error, --empaquetar comprueba sus escrituras, las
+     licencias (abajo), `make instalador` vuelve a congelar el generador si sus fuentes cambiaron (su GAMELIB_ID), el
+     aviso de main.c solo al abrirlo con doble clic (no en pruebas), y --build-game en una copia de trabajo usa
+     build/zig-slim. La captura de pruebas (--captura) pinta con WM_PRINT: la de DWM salía en blanco fuera de la
+     pantalla; SMRPG_VENTANA_FUERA=1 con --auto hace la instalación entera con la ventana fuera de la pantalla.
+  2. runtime/gamebuild.c para SMRPG: compila gamelib-src/game_overrides.c y lo enlaza antes que el código generado con
+     -FORCE:MULTIPLE (lld-link se queda con la primera definición para las llamadas de otros archivos, como
+     --allow-multiple-definition en el Makefile: comprobado con dos objetos); la biblioteca de importación es
+     smrpg-recomp.dll.a; `zig cc` no deja pasar esa opción, así que hace falta el zig adelgazado (zig/rt). Con zig, el
+     nivel de optimización se fuerza: `zig cc -O1` es su modo ReleaseFast y le pasaba a clang -O2 con el puntero de marco
+     en todas las funciones (medido con -v); ahora el -O pedido va también con -Xclang (gana el último) y con
+     -fomit-frame-pointer, como `make` con clang -O1. Medido: main_189.c (una función enorme) tardaba ~18 min y la
+     construcción entera 20; con -O1, 170 s ese archivo. La firma de su caché cambia ("zig-O"): lo compilado a -O2 no se
+     reutiliza. La barra de avance cuenta mitad bytes y mitad archivos cuando el generador ya terminó (las funciones
+     enormes del final la dejaban en el 88 % la mitad del tiempo).
+  2b. tools/gen.py: el trozo extra (las funciones a las que solo se llega por saltos calculados: main_868.c en la 1.0.0)
+     cuenta en el número de trozos y se anuncia en el avance; la construcción en el PC del jugador solo compila los que
+     anuncia y se dejaba fuera ese (faltaban f_70007e1dd0 y f_7000d799f8 al enlazar). `make` no cambia: compila todos.
+  3. smrpg-recomp.exe va directo al juego también sin --play (la pantalla de inicio es la de Link's Awakening), y si
+     faltan los archivos del juego o su código avisa de qué hacer (volver a ejecutar el instalador).
+  4. Lo que se reparte: el ejecutable release (sin consola) con el FFmpeg LGPL de `make deps-windows` (solo VP9, VP8,
+     Vorbis, Opus, H.264, AAC); `make gen-helper` en su propio entorno (build/gen-venv: capstone, unicorn, lz4,
+     PyInstaller); tools/zig_slim.sh guarda también las cabeceras de game_overrides.c y escribe link.rsp sin programas
+     externos (con ucrt64 delante del PATH, el basename pisaba el principio del archivo). El objetivo comprueba que no
+     van códecs GPL, nada del juego ni rutas del PC que lo construye. tools/instalador/licencias.sh: en licencias\ los
+     textos de todo lo que va con el programa (FFmpeg LGPL, SDL3, Opus, shaderc/glslang/SPIRV-Tools, libiconv, GCC,
+     MinGW-w64, zstd, ImGui, SMAA, Python, PyInstaller, Capstone, lz4, Unicorn GPL 2, AMD, las fuentes) y, en
+     licencias\fuentes, el código fuente de Unicorn 2.1.4 (el sdist de PyPI, comprobado por su sha256) y el del
+     generador congelado (lasgen-fuente.zip), porque lasgen lleva Unicorn.
+
+0.46.1-beta (2026-11-16) — por qué AMD FSR baja los FPS con la resolución interna alta: medido, y explicado en el menú
+  1. Medido (RX 9070 XT, ventana 3440x1440, Mushroom Way, HDR, sin generación de fotogramas): con la resolución interna
+     2160p el juego se dibuja a 5160x2160 (11,1 millones de píxeles, 2,25 veces los de la pantalla) y AMD FSR trabaja a
+     ese tamaño. Su pasada (con la copia del resultado de vuelta a la escena) cuesta: FSR 4, 3,1 ms por imagen (1,4 ms
+     a 3440x1440: crece con los píxeles, su red neuronal pasa por todos); FSR 3.1, 2,25 ms; FSR 2.3, 1,7 ms. SMAA, nada
+     medible (3,25 ms por imagen frente a 3,26 sin antialiasing). La imagen entera, a 2160p: SMAA 3,25 ms (240 FPS, el
+     tope; GPU al 78 %); FSR 4 5,5 ms (~175 FPS, GPU al 96 %: el límite de la tarjeta); FSR 3.1 4,6 ms (~210); FSR 2.3
+     4,1 ms (~234); FSR 4 «Calidad» (dibuja a 3440x1440 y FSR 4 amplía a 5160x2160) 4,35 ms (~220). FSR 4 con la
+     resolución interna 1440p (la de la pantalla): 3,25 ms y 240 FPS con la GPU al 78 %, lo mismo que SMAA a 2160p.
+     FSR 4 a 2160p con la generación de fotogramas y el límite en 120: 120 imágenes + 120 generadas = 240 en pantalla,
+     GPU al 83 %. Lo que pone el port alrededor de FSR es poco: sin la copia de vuelta, 0,1-0,25 ms menos; sin la
+     exposición automática, nada medible (probado y dejado como estaba).
+  2. Menú > Vídeo, el recuadro de impacto de «Antialiasing» y «Versión de FSR»: FSR 3.1 y 2.3 se estimaban en la mitad
+     de FSR 4 y miden el 72 % y el 54 %; ahora van con esos factores (con «Automática», la versión que corre de verdad,
+     del estado de AMD FSR) y con las medidas de arriba. Con la resolución interna por encima de la ventana, una línea
+     más: FSR trabaja a la resolución interna (cuántas veces los píxeles de la ventana), cuánto costaría a la de la
+     pantalla y qué hacer para más FPS (esa resolución, «Calidad de FSR» o la generación con el límite a la mitad).
+     Comprobado en una captura del menú a 2160p con FSR 4: cabe encima de los botones.
+  3. Pruebas: el perfilador de GPU (LARECOMP_GPUPROF_AT) da a AMD FSR su propia fila («AMD FSR WxH -> WxH (version
+     N)»); LARECOMP_SET acepta fsr_version (0 automática, 4, 3, 2).
+
+0.46.0-beta (2026-11-16) — negro de verdad, películas que llenan el 21:9 y combates sin desfase por encima de 60 FPS
+  1. Menú > Vídeo > Imagen > «Negro puro» (activado). La pantalla de carga entera y los lados de los vídeos en 21:9 se
+     veían de un verde oliva muy oscuro en vez de negros: (13, 13, 0) en sRGB, y más claro con HDR. No era la pantalla
+     ancha: es el etalonaje de color del propio juego. El posproceso de URP pasa la escena por una LUT (una tira
+     1024x32 RGBA8, 32 cortes de 32x32, que la pasada ColorGradingLut dibuja en cada fotograma) cuya entrada del negro
+     es (1, 1, 0)/255; donde no hay nada delante (la carga, los lados de un vídeo, la escena antes de un fundido) queda
+     ese velo. Medido con el volcado de pasadas del fotograma 1100: la pasada 000 es la LUT y la 005 el posproceso de la
+     escena vacía, (1, 1, 0) lineal. Ahora, al acabar esa pasada, la LUT se rehace con su negro a 0 ((c - n) / (1 - n),
+     n = su texel del negro; lo demás cambia un 0,4 %). Solo se quita un velo pequeño: del todo hasta 2/255 y cada vez
+     menos hasta 6/255, sin saltos; un negro más alto es a propósito (sombras teñidas, fundidos de color) y se deja.
+     Solo tras un dibujo de verdad de la LUT: la pasada de un solo destino con su forma cuyo último dibujo fue con el
+     sombreador LutBuilderLdr de URP (su huella); un borrado u otra textura de la misma forma no se tocan, y otro
+     sombreador sobre un destino así sale en el registro. La interfaz y los vídeos no pasan por la LUT: no cambian. El
+     volcado de pasadas guarda la LUT como la dibuja el juego. Medido después: los lados de los vídeos, (0, 0, 0).
+     runtime/nvn/vulkan/exec.c lut_black_fix, vulkan/shaders.c lutblack.frag; ajuste true_black.
+  2. Menú > Vídeo > Pantalla > «Vídeos en pantalla ancha»: Llenar la pantalla (por defecto) o Bandas negras. Las
+     películas del juego son 16:9 y su reproductor (MoviePlayer: una RawImage de 1280x720 en un lienzo de referencia
+     1280x720) las dejaba en el centro. Llenar: la RawImage crece con el aspecto del vídeo hasta cubrir el lienzo (en
+     21:9 recorta un poco arriba y abajo; en 16:10, a los lados), sin estirar. El fondo animado del título (va en bucle,
+     con el logotipo pegado arriba) se queda en 16:9. El fundido a negro del reproductor cubre ahora toda la pantalla.
+     Se aplica en marcha (también al cambiar la ventana o la pantalla ancha). MoviePlayer.Update envuelto con
+     hle_override: runtime/hle/movie_fit.c; ajuste movie_fit.
+  3. Combates: siempre a 60 FPS, como en la consola, con cualquier «Límite de FPS». La lógica del combate (turnos,
+     golpes, las ventanas del golpe a tiempo, los sonidos) avanza un paso de 1/60 s por imagen (BattleManager.update),
+     mientras las animaciones de los personajes y el sonido van por tiempo; con el límite en 240 el combate iba a 240
+     pasos por segundo, cuatro veces más deprisa que sus animaciones: los golpes a tiempo, el sonido y la velocidad,
+     desfasados. Ahora, mientras dura un combate (desde BattleManager.set_frame_rate, sustituida en
+     tools/game_overrides.c, hasta que el juego devuelve su tasa a 0), el vsync que marca el ritmo de Unity late a 60 Hz
+     (runtime/hle/battle_rate.c, hle/vi.c); fuera, al límite de siempre. Con la generación de fotogramas, 120 en pantalla.
+     El juego pide 60 en combate (su modo de 30 con dos pasos por imagen es de depuración). El hilo del vsync solo lee
+     una marca que el juego pone al día en cada imagen (rt_battle_poll), no la memoria del juego. AMD FSR recibe ahora el
+     tiempo medido entre imágenes (antes, 1000 / el límite de FPS, falso si el juego no llegaba al límite).
+  Probado (pruebas ocultas a 2560x1080 con la carpeta de datos aislada):
+  - el negro: los lados del vídeo del título y de la apertura, de (13, 13, 0) a (0, 0, 0); la carga entre el título y
+    la partida, negra; apagándolo en marcha (LARECOMP_SET true_black=0) vuelve el (13, 13, 0), y al encenderlo se va;
+  - los vídeos: la apertura (movie_001) llena los 2560x1080 desde su primera imagen (la RawImage, 1280x720 -> 1707x960
+    en un lienzo de 1707x720); el título (movie_017, en bucle), en su 16:9 con bandas negras; movie_fit 0 / 1 en marcha;
+  - el combate: tres arranques que atacan al mismo Paratroopa en el mismo segundo real (a 60 Hz, como la consola; con
+    el límite en 240 sin el arreglo; y con él), capturas de +0,25 a +4 s tras pulsar Atacar. Con el arreglo, las mismas
+    imágenes que a 60 (diferencia media 0,13 - 0,40: el ruido de FSR); sin él, 0,87 - 3,62: a +2 s ya había pasado el
+    turno entero (el ataque de Mario y el contraataque) mientras a 60 Mario aún volvía a su sitio. El vsync se queda a
+    60 Hz durante el combate y vuelve a 240 al acabar, con la partida otra vez a 240 FPS.
+  - el menú: la fila nueva se ve con sus tildes.
+  - tras la revisión: con el límite en 240 desde antes del combate, el vsync baja a 60 Hz al empezarlo y vuelve a 240
+    al acabar (la partida, 240 FPS antes y después); a 3440x1440 con generación de fotogramas y HDR, el combate a 60
+    con 120 imágenes en pantalla y la película llenando (lienzo de 1720x720).
+  Revisión (dos revisores y un verificador, solo lectura): 7 hallazgos, todos de gravedad baja. Arreglados los 2
+  confirmados (el volcado de pasadas guardaba la LUT ya corregida; el tiempo de imagen de FSR) y los 2 plausibles (la
+  LUT reconocida solo por su forma; el corte brusco del umbral). 3 refutados porque SMRPG no reinicia el juego dentro
+  del proceso; aun así, el gancho de los vídeos se registra una sola vez y el hilo del vsync ya no lee memoria del juego.
+  Queda (de antes): el fundido a blanco del título a la apertura es del panel 16:9 del título y no llega a los lados.
+  Pruebas nuevas: LARECOMP_SET con true_black y movie_fit; LARECOMP_BATTLE_FIX=0 (como antes) y LARECOMP_BATTLE_FPS=30;
+  LARECOMP_LOG_MOVIE_FIT=1 (las medidas que ve el ajuste de los vídeos).
+
+0.45.1-beta (2026-11-16) — numeración x.y.z-alfa / -beta
+  Las versiones pasan a x.y.z con sufijo alfa o beta (arriba): en GitHub, las 46 releases (v0 a v45) se renombraron con su
+  etiqueta nueva en el mismo commit (vN -> 0.N.0-alfa / -beta) y los títulos sin «Versión N» ni «vN»; aquí y en ESTADO.md,
+  igual.
+  La versión se ve: en la pestaña Salir del menú (Versión) y en la primera línea del registro ([info] ... 0.45.1-beta).
+  runtime/app_name.h APP_VERSION. (La de la base, LARECOMP_VERSION, sigue siendo la etiqueta de las cachés de shaders:
+  cambiarla las habría vaciado.)
+
+0.45.0-beta (2026-11-16) — Vídeo: el medidor, el impacto y los botones en el recuadro de la derecha, siempre a la vista
+  El recuadro de la descripción (a la derecha de la pestaña Vídeo), de arriba abajo:
+  - arriba, siempre y en pequeño: el medidor «AHORA» (CPU, GPU con sus ms por imagen, RAM, SSD, VRAM; un punto de color
+    cada uno);
+  - la descripción del ajuste elegido (con su barra si es larga);
+  - justo encima de los botones, el impacto de ese ajuste: «IMPACTO: <ajuste>», los cinco semáforos con lo que gasta en
+    cada uno («+1,8 ms», «502 MB»...) y el porqué con lo medido;
+  - abajo, siempre igual: Guardar, Deshacer, Restablecer, Reiniciar y una línea de estado («Guardado a las...», «Pulsa
+    otra vez para confirmar», «Pendiente de reiniciar: el idioma»). Restablecer y Reiniciar piden pulsar otra vez.
+  La lista de la izquierda queda solo con los ajustes (sin el medidor, sin los puntos bajo cada fila, sin la sección de
+  botones). Con mando o teclado: Abajo desde la última fila lleva a los botones, izquierda / derecha entre ellos, Arriba
+  vuelve a la lista. runtime/ui/option_rows.mm (opt_pane_header, opt_pane_footer, opt_pane_button, opt_impact_next con
+  sus cifras), runtime/ui/menu.mm (meter_header, buttons_footer).
+  Probado (pruebas ocultas, 3440x1440 con 4K internos y generación de fotogramas): el bloque de impacto sale con el
+  ajuste elegido (4K: GPU rojo 5,4 ms, el 65 % de una imagen a 120 FPS; VRAM 502 MB); la navegación hasta los botones y
+  de vuelta; Deshacer, Restablecer y Reiniciar desde los botones (LARECOMP_MENU_PRESS con su id: guardar, deshacer,
+  restablecer, reiniciar).
+
+0.44.0-beta (2026-11-16) — botones de ajustes y el impacto de cada ajuste gráfico en CPU, GPU, RAM, SSD y VRAM
+  Menú > Vídeo:
+  - «Rendimiento ahora» (arriba): lo que gasta el juego, medido cada medio segundo, con colores de semáforo: CPU (% del
+    procesador), GPU (% ocupada, de los contadores de Windows: con la generación de fotogramas incluida; y ms por imagen
+    del juego, de las marcas de tiempo del render), RAM (física del proceso), disco (MB/s leídos + escritos) y memoria de
+    vídeo (la usada y la que el controlador deja, con su reparto: destinos de render, texturas, texturas HD, AMD FSR,
+    generación de fotogramas). runtime/perf_meter.c; LARECOMP_LOG_PERF=1 lo escribe en el registro.
+  - Bajo cada ajuste gráfico, su impacto con el valor de ahora en CPU, GPU, RAM, SSD y VRAM (un punto verde, amarillo o
+    rojo cada uno) y el porqué con cifras en su descripción. La memoria de vídeo es la medida en marcha (cada clase
+    exacta; AMD FSR y la generación, lo que dice AMD de sus contextos); la GPU, frente al tiempo de una imagen al límite
+    de FPS, con el tiempo medido y lo medido en el PC de pruebas (Radeon RX 9070 XT, 3440x1440, 60 FPS, la misma escena):
+      base (resolución = pantalla, AMD FSR nativo) 3,9 ms/imagen; sin antialiasing 2,4; SMAA 2,8; resolución interna 4K
+      7,6 ms y 0,5 GB de destinos; 8K 13,7 ms y 2 GB (AMD FSR no se puede crear a 10320x4320: a esa resolución no hay
+      FSR); supersampling x4 13 ms y 0,9 GB; FSR rendimiento 3,2 ms; anisótropo 16x +0,4; nitidez +0,2; detalle de
+      texturas, nada medible; generación de fotogramas +25 % de GPU con 120 imágenes del juego (2,1 ms por imagen
+      generada, contadores de Windows) y 228 MB, la CPU +60 %; límite de FPS 60 / 120 / 240: CPU 3 / 5,5 / 9,5 %, GPU 22 /
+      43 / 78 %; texturas HD (43) 47 MB; el volcado de texturas, hasta 4 MB/s de disco.
+    Lo no medido se dice («estimado»): FSR 3.1 / 2.3 y FG 3.1 (la mitad que las versiones 4), HDR (poco).
+  - «Ajustes» (al final): Guardar ajustes (ahora, con la hora; también se guardan solos al cerrar el menú), Deshacer
+    cambios (a como estaban al abrir el menú), Restablecer vídeo (los valores de fábrica; pide pulsar otra vez) y
+    Reiniciar el juego (otra copia con la misma línea de órdenes, que espera a que esta termine, y esta se cierra:
+    aplica el idioma; pide pulsar otra vez). El idioma avisa cuando un cambio espera a reiniciar.
+  Audio: Restablecer audio. Salir: Reiniciar el juego.
+  También: la descripción de la derecha ya no se queda la de otra pestaña (salía la de Controles en Vídeo, Audio y
+  Salir hasta elegir una fila).
+  Probado (pruebas ocultas): Deshacer devuelve anisótropo, nitidez y FPS a los de antes; Restablecer pone los de
+  fábrica; Reiniciar abre otra copia que arranca al cerrarse esta. Pruebas: LARECOMP_MENU_PRESS=<imagen>:<etiqueta>
+  pulsa esa fila del menú; LARECOMP_SET acepta aniso, sharpness, tex_detail, fps_limit, hdr, tex_dump y tex_pack.
+
+0.43.0-beta (2026-11-16) — los menús en pantalla ancha ya no «achican» el juego
+  Al abrir un menú (X objetos, Y especiales, + menú) en 21:9, la escena se encogía al centro con el ancho de un 16:9,
+  comprimida, y gris a los lados; al cerrarlo volvía a llenar. Medido: la escena 21:9 entera comprimida a 1920 de ancho
+  (escala 0,75, correlación 0,988), barras de 320 píxeles a cada lado de 2560x1080.
+  Por qué: el menú (Menu.StartScreenCapture) copia la pantalla entera (2560x1080) y la pone de fondo en una RawImage,
+  directa o desenfocada; esa RawImage mide 1920x1080 en el lienzo, el 16:9 de la consola.
+  Arreglo (tools/game_overrides.c): RawImage.set_texture sustituida, igual que la original, y si la textura nueva tiene
+  el aspecto de la pantalla del juego y la RawImage es un recuadro 16:9 a toda la altura, pasa al aspecto de la textura
+  (más ancha en 21:9, más alta en 16:10); si luego recibe otra textura, vuelve a su medida.
+  Medido (pruebas ocultas): en 21:9 el fondo del menú es la escena de antes a escala 1,0 (correlación 0,983-0,99; la
+  comprimida da 0,34) y los lados, antes grises, coinciden con ella (0,999); sin bandas en 21:9, 16:9 (sin cambios) ni
+  16:10 (la imagen crece en alto); al pasar de 21:9 a 16:9 y volver entre menús, vuelve a su medida y se ensancha otra
+  vez. Los minijuegos copian la pantalla igual (su ScreenCapture), sin probar.
+  Visto al probar: las capturas de prueba (LARECOMP_HOST_INPUT «shot») paran ~360 ms cada una; muchas seguidas bajan el
+  contador a ~35 FPS. No es del juego.
+
+0.42.0-beta (2026-11-16) — 3440x1440 sin las bandas de 1-2 filas
+  La pantalla del juego ensanchada se redondeaba a múltiplos de 8: en un monitor 3440x1440 quedaba de 2584x1080, un poco
+  más ancha que el monitor, y la imagen dejaba una fila negra arriba y dos abajo. Ahora a múltiplos de 4: 2580x1080, su
+  aspecto exacto (runtime/hle/unity_screen.c screen_for). Medido: 3440x1440 lleno (filas 0-1439), al arrancar y al
+  cambiar en marcha, a escala 1,0 contra el arranque en 21:9.
+  (Visto al medir, sin arreglar aún: la última columna de la derecha y la primera fila de arriba salen más oscuras, a
+  cualquier resolución y desde antes de esta versión.)
+
+0.41.0-beta (2026-11-16) — 21:9 en marcha (sin volver a abrir el juego) y guía de controles
+  Pantalla ancha en marcha: al cambiar el modo o la resolución de pantalla (o estirar la ventana) a otro aspecto, el juego
+  pasa a él en un momento, con vista ancha de verdad, sin bandas y sin estirarse. Antes (0.40.0-beta) se quedaba con bandas hasta
+  volver a abrirlo: se veía la imagen 16:9 en el centro aunque se pusiera pantalla completa.
+  - runtime/hle/unity_screen.c rt_unity_screen_follow (hilo principal): la ventana cambió de aspecto y se queda quieta
+    300 ms -> el aviso 31 de AM (cambio del modo de rendimiento); Unity vuelve a pedir su resolución (main 0x70006b7204,
+    ya sustituida) y la aplica con su SetResolution (0x700062f1d0).
+  - tools/game_overrides.c: SetResolution sustituida, igual que la original sin dos cosas: el recorte a 1920x1080 (el
+    máximo de la Switch: la escena seguía a 1920 de ancho y salía estirada un 33 %) y la marca «resolución propia» (+0xc9:
+    con ella los avisos siguientes se ignoraban).
+  - Las texturas de ventana de Unity y la profundidad de su backbuffer (creadas a 1920x1080; t->screen) miden lo que la
+    pantalla del juego también en marcha: se rehacen en su siguiente uso (runtime/nvn/vulkan/textures.c screen_follow).
+  - Con la ventana minimizada (o de menos de 64 píxeles) el aspecto no cambia (device.c renderer_display_aspect).
+  Medido (pruebas ocultas, escena quieta del Camino de los Champiñones contra un arranque directo a cada tamaño): de 16:9
+  a 21:9 en marcha la ventana queda llena y las proporciones son las del arranque en 21:9 (escala 1,0 en los dos ejes;
+  los laterales que aparecen coinciden con los del arranque en 21:9 con correlación 0,997-0,998: escena real); 21:9 ->
+  16:9 -> 21:9 -> 3440x1440 -> 16:10 seguidos, todos llenos y a escala 1,0; con el menú abierto también (se aplica al
+  momento); con AMD FSR y con la generación de fotogramas (se rehacen a la nueva medida y siguen).
+  Controles (Menú > Controles):
+  - «Teclas y botones»: qué hace cada uno en Super Mario RPG con la tecla y el botón del mando de ahora (cambian con las
+    asignaciones): moverse, hablar / aceptar (en combate, atacar), saltar / cancelar, objetos, especiales, menú, ataque
+    de la barra, caminar (mantener L, R, ZL o ZR), y las del port (Esc / F1 menú, F11 / Alt+Intro pantalla completa). A
+    o clic en una fila: su entrada en «Configurar controles». Lo que hace cada botón, de la sección de controles de Super
+    Mario Wiki y de la propia interfaz del juego; lo que ninguna dice (cruceta, stick derecho) no se cuenta.
+  - «Configurar controles», en español (estaba en inglés), con lo que hace cada botón junto a su nombre y los nombres de
+    teclas y botones en español (Intro, Retroceso, Flecha izq., Botón +...).
+  Pruebas: tools/probar.sh se puede lanzar con otra copia del juego abierta si lleva una carpeta de datos aislada
+  (LARECOMP_DATA_ROOT) y cierra solo la suya (el PID nuevo).
+
+0.40.0-beta (2026-11-16) — modo de pantalla (ventana, sin bordes, pantalla completa) y resolución de pantalla
+  Menú > Vídeo > Pantalla:
+  - «Modo de pantalla»: Ventana (con marco), Ventana sin bordes (ocupa el monitor a su resolución, sin ser pantalla
+    completa: Alt+Tab al momento) o Pantalla completa (exclusiva). F11 / Alt+Enter: entre la ventana y el último de los
+    otros dos. Ajuste window_mode (window / borderless / fullscreen); el fullscreen = 1 de antes se lee como sin bordes.
+  - «Resolución de pantalla» (la final, no la interna): en ventana, tamaños de 16:9, 16:10, 21:9 y 32:9 que caben en el
+    monitor (1280x720 ... 5120x2160) o «Libre»; en pantalla completa, los modos del monitor de su mismo aspecto (en uno
+    21:9: 3440x1440 y 2560x1080), para que el monitor no estire la imagen; sin bordes, la del monitor. Ajuste out_res.
+  - Se aplican al momento (runtime/ui/menu.mm menu_apply_window_mode_now, en el hilo principal) y al arrancar, antes de
+    que el juego pida su resolución (device.c ui_window_init).
+  21:9 (y 32:9, 16:10): el juego toma el aspecto de la ventana o el monitor al abrirse, con vista ancha de verdad
+  (comprobado midiendo: el centro de la imagen 21:9 coincide con la 16:9 a escala 1, correlación 0,987: más escena a
+  los lados, nada estirado). Cambiado durante la partida, la imagen conserva el suyo con bandas (sin estirarse) y el
+  nuevo se aplica al volver a abrir el juego; el menú lo avisa con el tamaño que tendrá.
+  Por qué no al momento (probado y descartado): Unity vuelve a pedir su resolución con el aviso de cambio del modo de
+  rendimiento, pero su SetResolution (main 0x700062f1d0) la recorta a 1920x1080, el máximo de la Switch, y marca «propia»
+  cualquier otra (luego ignora los avisos: «custom resolution was applied»). La escena seguía a 1920 de ancho y salía
+  estirada un 33 %, que es lo que se vio en la primera prueba de esta versión. Al arrancar esa vía no se usa.
+  Probado en la pantalla (3440x1440 a 240 Hz): sin bordes (3440x1440 en 0,0, sin marco), pantalla completa exclusiva y
+  ventana 1600x900 con el juego 21:9 dentro con bandas: proporciones medidas iguales (escala 1,0) en los tres; y oculto,
+  ventana de 16:9 a 21:9 en marcha: el juego sigue 16:9 con bandas, sin estirarse.
+  Pruebas: LARECOMP_SET acepta window_mode, out_w, out_h y wide; LARECOMP_WINDOW_MODES=1 deja aplicar los modos en una
+  ventana de prueba; [ventana] en el registro (cada modo aplicado y los modos del monitor).
+
+0.39.0-beta (2026-11-16) — los vídeos ya no se encogen al subir la resolución o el supersampling
+  Con la resolución interna por encima de 1x (2x-8x) o con supersampling, el fondo animado del título (un vídeo) y las
+  películas se veían encogidos en la esquina de arriba a la izquierda (a 4x, a un cuarto), con la interfaz a tamaño
+  completo. Causa: la textura donde se decodifica el vídeo es «escalable» (16:9 con marca de destino), así que se reserva
+  a la escala de render (a 4x, 7680x4320), pero cada fotograma se dibujaba a su tamaño (1920x1080) en la esquina, y la
+  textura seguía diciendo que su contenido la llenaba entera. Por debajo de 1x no se notaba (la textura era más pequeña
+  que el vídeo y este se reducía a toda ella). Ahora el vídeo llena siempre la textura escalada, ampliado o reducido, y
+  ella lo dice (exec.c vk_convert_nv12, NV12, el camino de las películas; textures.c upload_pending, RGBA: por una imagen
+  temporal y un blit, como la copia de la versión 27).
+  Probado (ventana de 1276x720, la del aviso): título a «igual que la pantalla», 4x, 4x + supersampling x4, 2x y
+  supersampling x2, cambiados en marcha: lleno en todos; en Mushroom Way y en batalla, igual.
+  Pruebas: LARECOMP_SET="fotograma:ajuste=valor,..." cambia en marcha res_mode, supersample, antialias, fsr_mode,
+  framegen o fg_version (como el menú); las capturas de ventana con nombre de LARECOMP_HOST_INPUT ("fotograma:shot:
+  nombre", build/nombre.png) funcionan ahora también en Vulkan; con LARECOMP_DEBUG_FRAME, cada pasada anota su escala y la
+  de sus destinos ([pass]).
+
+0.38.0-beta (2026-11-16) — generación de fotogramas de AMD FSR (FG 4 por red neuronal, FG 3.1)
+  Menú > Vídeo > Imagen, con Antialiasing «AMD FSR»: «Generación de fotogramas» Sí/No y «Versión de la generación»
+  (Automática: FG 4.0.2 en las Radeon RX 9000, FG 3.1.6 en las demás). Entre cada dos imágenes del juego se presenta una
+  generada: en pantalla, el doble de imágenes por segundo. Necesita también amd_fidelityfx_framegeneration_vk.dll junto
+  al ejecutable (el SDK de AMD FSR 2.4, como las de FSR). Ajustes framegen y fg_version.
+  Cómo va (runtime/nvn/vulkan/vk_fg.cpp, nuevo): la swapchain de la ventana es la de AMD, con dos colas más de la
+  familia gráfica (presentación y adquisición; device.c pide hasta 3). Cada fotograma con FSR, en el hilo grabador y en
+  su orden, se configura y se prepara (profundidad y vectores de movimiento de FSR, cámara) justo después de FSR; la
+  presentación genera. Los fotogramas sin la pasada de movimiento (pantallas de carga, menús del juego sin escena) van
+  sin generación. Se pausa con el menú del runtime abierto. Apagarla, encenderla, cambiar de versión o de tamaño rehace
+  la swapchain de AMD en su sitio o la cambia por la normal.
+  La cámara (FG 4 la exige): exec.c la saca de la vista-proyección de URP en el dibujo de los vectores de cámara (en vs
+  c4: la de este fotograma y la del anterior; se distinguen por la historia): posición, ejes, campo de visión (10° en
+  Mushroom Way) y planos (0,3-0,6 a 1000). FSR usa ahora también esos planos y ese campo.
+  Hallazgo: la generación quiere la Y de los vectores al revés que FSR. Con la escala de FSR, FG 4 solo fundía las dos
+  imágenes al moverse la cámara en vertical (y FG 3.1 tiraba de su flujo óptico); medido en capturas de lo que se
+  presenta (LARECOMP_FG_PSHOT): con la Y invertida, el generado queda a medio camino (2,2 de 4,5 px en vertical, 5,2 de
+  10,5 en horizontal). FSR, con la Y invertida, empeora (más error contra el render nativo): solo cambia para la generación.
+  El contador de FPS muestra también lo que se ve («120 fps (240 con generación)») y, sin HDR, no se deforma en los
+  generados: la ventana se copia antes de dibujar el menú del runtime y AMD la usa para no interpolarlo (HUDLessColor).
+  Con HDR no (AMD lo quitaba de los generados): se interpola con la escena.
+  Arreglos de paso: la función de AMD para las imágenes de su swapchain no corrige la cuenta (vistas de imágenes nulas y
+  el driver caía al arrancar): se pregunta primero cuántas hay. El HDR prefiere A2B10G10R10 (la generación no toma
+  A2R10G10B10). Al rehacer el contexto de FSR se espera solo a la cola del juego (record.c tiene ahora un cerrojo de cola).
+  Probado (carpeta aislada, ventana oculta): Mushroom Way caminando, 3440x1440 con HDR a 120 FPS (3.600 de 3.600
+  fotogramas con uno generado, ~234 presentados por segundo), FSR x2 + generación, batalla, menú abierto (pausa),
+  apagar/encender/cambiar de versión en marcha. Sin la generación, todo como antes.
+
+0.37.0-beta (2026-11-16) — «Compilación de shaders: Equilibrada» (por defecto): casi nada aparece tarde
+  Al entrar por primera vez en una zona, los dibujos con shaders nuevos se saltaban mientras se compilaban (en segundo
+  plano): de 200 a 2.466 dibujos en 1-2 segundos, objetos que aparecían tarde. El modo nuevo, el de por defecto, espera
+  a cada pipeline nuevo como mucho 10 ms en total por imagen (exec.c draw_waits_for_build / build_wait); agotado ese
+  tiempo, lo que falte se salta como antes. Con la caché de pipelines del driver, casi todo llega a tiempo.
+  Menú > Vídeo > Imagen > «Compilación de shaders»: Equilibrada, En segundo plano o Esperar (sin límite).
+  Ajuste shader_wait: 0 en segundo plano, 1 esperar, 2 equilibrada.
+  Probado: dos interiores sin visitar (Moleville, Seaside Town): 23 y 29 dibujos saltados al entrar (antes, cientos),
+  sin tirones más allá del de la carga de la escena.
+
+0.36.0-beta (2026-11-16) — texturas HD con IA en un doble clic
+  texturas-hd.cmd (junto a jugar.cmd) + tools/texturas_hd.py: con «Volcar texturas» activado en el menú, se juega un
+  rato; luego el .cmd amplía con IA las texturas de color volcadas (sRGB; no las normales ni las máscaras, ni las
+  planas o pequeñas) y las deja en la carpeta texturas, que el juego usa con «Texturas HD» (versión 31). IA:
+  Real-ESRGAN ncnn Vulkan (BSD-3, portátil: carpeta realesrgan junto al .cmd, fuera del repositorio, o la variable
+  REALESRGAN) con el modelo realesr-animevideov3, el que mejor va con el estilo del juego (bordes limpios, sin inventar
+  detalle): x4 reducida a x2 por defecto (--escala 2, 3 o 4: más memoria de vídeo). El alfa se amplía aparte.
+  Probado: las 111 texturas volcadas del castillo -> 43 HD en 8 s en una RX 9070 XT; en el juego, 32 sustituidas en el
+  pasillo sin errores; a 2560x1440, el bordado de la alfombra, la piedra y la ropa de Mario, más definidos.
+
+0.35.0-beta (2026-11-16) — FSR con escalado: Calidad, Equilibrado, Rendimiento y Ultra rendimiento
+  Menú > Vídeo > Imagen > «Calidad de FSR»: nativo (solo antialiasing, como en la 33) o la escena dibujada con 1,5,
+  1,7, 2 o 3 veces menos píxeles de ancho y de alto y ampliada por FSR a la resolución interna. Usa la maquinaria de
+  la resolución dinámica del renderizador: las imágenes de la pantalla se reservan a tamaño completo y, al empezar el
+  fotograma, la escala de render baja (la escena ocupa una esquina; los shaders ya leen ese contenido parcial por su
+  tabla de escalas); tras FSR, que escribe la imagen ampliada en el color de la escena, vuelve a la completa para el
+  posproceso y la interfaz (exec.c fsr_pass_begin / fsr_dispatch; vk_fsr.cpp con tamaños de render y de salida y
+  FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION). La secuencia de subpíxeles crece con la razón (8 x razón^2 fases).
+  Con la resolución interna «Dinámica», solo nativo.
+  Probado a 1920x1080 con FSR 4 en Rendimiento (960x540 -> 1920x1080): la escena nítida y la interfaz a resolución
+  completa, en el pasillo y en la primera batalla (su menú es de la cámara superpuesta, después de FSR).
+
+0.34.0-beta (2026-11-16) — elegir FSR 4, FSR 3.1 o FSR 2.3
+  Menú > Vídeo > Imagen > «Versión de FSR» (con Antialiasing en «AMD FSR»): automática (la que elige el SDK: la mejor
+  que corre la tarjeta), FSR 4 (4.1.2), FSR 3.1 (3.1.6) o FSR 2.3 (2.3.4). El SDK de AMD trae las tres; la elegida se
+  pide al crear el contexto (ffxOverrideVersion) y un cambio lo vuelve a crear al momento (vulkan/vk_fsr.cpp).
+  Ajuste fsr_version en larecomp.ini. Probado: las tres en una RX 9070 XT, con la escena quieta.
+
+0.33.0-beta (2026-11-16) — AMD FSR 4 / 3.1 como antialiasing, con los vectores de movimiento del propio juego
+  Menú > Vídeo > Imagen > Antialiasing > «AMD FSR»: antialiasing temporal de AMD (FSR 4.1.2, de red neuronal, en las
+  Radeon RX 9000; FSR 3.1.6 en las demás) a la resolución interna, sobre la escena antes del posproceso de URP.
+  1. Vectores de movimiento: URP 12 trae su pasada MotionVectorRenderPass (cámara y cada objeto con sus matrices del
+     fotograma anterior, a _MotionVectorTexture RG16F), pero el juego nunca la pide. tools/game_overrides.c sustituye
+     UniversalRenderer.GetRenderPassInputs (main 0x7001838ee0; igual que el código abierto de URP) y la pide, con la
+     textura de profundidad que necesita, cuando FSR está elegido (runtime/hle/unity_screen.c rt_force_motion_vectors).
+  2. runtime/nvn/vulkan/exec.c (fsr_pass_begin): en cada fotograma localiza el color y la profundidad de la escena y
+     la textura de movimiento; las pasadas con la profundidad de la escena se dibujan desplazadas el subpíxel del
+     fotograma (secuencia Halton 2,3, en el viewport: sin tocar shaders); FSR va al empezar la primera pasada, tras la de
+     movimiento, que no dibuja en la escena (la copia final), o la de la cámara superpuesta de las batallas (su interfaz
+     no pasa por FSR). El resultado vuelve a la escena: el posproceso y la interfaz siguen igual.
+  3. runtime/nvn/vulkan/vk_fsr.cpp: el SDK de AMD FSR 2.4 (cabeceras MIT en third_party/amd-fsr; sus DLL firmadas,
+     junto al ejecutable, no van en el repositorio: third_party/amd-fsr/LEEME.txt). Graba en el hilo grabador con un
+     paquete nuevo de llamada (record.c rec_CmdCallback). device.c activa lo que pide FSR 4 si las DLL están:
+     matrices cooperativas, float8, float16, producto escalar entero y las extensiones ya integradas por su nombre.
+  4. (diagnóstico) LARECOMP_LOG_CANVAS=1: el nombre, la referencia y la escala de cada lienzo que escala el juego.
+  Probado: FSR 4.1.2 en una RX 9070 XT; con la cámara quieta, bordes sin escalones y la textura igual de nítida;
+  caminando y en la primera batalla, sin estelas (Mario atacando), con la interfaz nítida.
+
+0.32.0-beta (2026-11-16) — TLD4 (textureGather) en el traductor
+  runtime/nvn/maxwell/translate.c emit_tld4: TLD4 y TLD4.B, la lectura de los cuatro texels vecinos de una componente
+  (o su comparación de profundidad), con desplazamientos AOFFI, en 2D, 2D array y cubo. Operandos como en Ryujinx.
+  Con eso se traducen los 4 shaders del juego que los usan: la profundidad de campo Bokeh de URP y su escalado EASU.
+  De los 82.032 shaders quedan 22 sin traducir, ninguno que el juego use: los de VR, wireframe y LookDev (del editor),
+  CopyDepth con MSAA (el juego no lo usa) y 7 internos de main que no aparecen al jugar.
+  Probado: barrido de esos shaders (compilan a SPIR-V) y la partida sin dibujos saltados.
+
+0.31.0-beta (2026-11-16) — texturas HD: volcado y sustitución
+  Menú > Vídeo > Imagen:
+  1. «Volcar texturas»: cada textura nueva que carga el juego se guarda en <datos>/texturas-volcadas (junto a los
+     guardados) como <huella>_<ancho>x<alto>_<formato>.png. La huella (16 cifras hexadecimales) es de los datos del
+     nivel 0 tal como los da el juego (los bloques ASTC 6x6 de casi todas, o los texels RGBA8) con su tamaño y formato:
+     no depende de la dirección en memoria ni de si llegan desde la CPU o con una copia de la GPU.
+  2. «Texturas HD» (activado; sin carpeta no hace nada): un PNG de <datos>/texturas (o sus subcarpetas) cuyo nombre
+     empieza por la huella sustituye a la textura: con las mismas proporciones e igual o más grande (ampliada x2 o x4
+     con una IA, por ejemplo). Los mipmaps se generan. El juego sigue viendo el tamaño original: las consultas de
+     tamaño y las lecturas por texel pasan por la escala de la textura, como las de las texturas a otra resolución.
+     Si el juego pone otros datos en esa textura, vuelve la suya.
+  runtime/nvn/vulkan/texpack.c (huella, índice de la carpeta, volcado), textures.c (vk_texpack_replace /
+  vk_texpack_unreplace, upload_texture), exec.c (copy_buffer_to_texture). Sin librerías nuevas: SDL3 lee y escribe PNG.
+  Probado: 111 texturas volcadas entrando en la partida (33 MB); la armadura de las estatuas del castillo, teñida de
+  rojo y al doble de tamaño, sale en el juego.
+
+0.30.0-beta (2026-11-16) — 130 shaders más que se traducen (barrido de shaders)
+  El barrido de la 0.29.0-beta (tools/shader_sweep.c, 82.032 shaders) dejaba 156 sin traducir; 130 eran texturas bindless
+  cuyo manejador el rastreo no seguía (runtime/nvn/maxwell/translate.c):
+  1. HSETP2, DSETP, VSETP, KIL, BPT, CCTL, RED, SUST, ST, R2B y SETCRSPTR no escriben un registro en sus bits 0-7 (el
+     destino de HSETP2 es un predicado): se tomaban por escrituras del registro del manejador (74 shaders).
+  2. Una definición con predicado (@P0 LOP.OR r32, r42, c[2][..]) vale cuando el uso solo se alcanza por el lado
+     «P0 cierto» de un salto que la sigue (@!P0 BRA fuera de él), sin escrituras de P0 ni salidas entre medias
+     (51 shaders): el compilador de NVN guarda así las texturas que solo lee si el material las usa.
+  3. Una escritura con el predicado contrario al del uso (@!P0 MOV r24 ... @P0 TEX.B r24) no es su definición.
+  4. Un manejador guardado en memoria local y recargado (STL / LDL) se sigue hasta lo que se guardó.
+  Barrido completo después: 82.006 de 82.032 (antes 81.876), ninguno peor. Quedan 26 con instrucciones que el
+  traductor no tiene (VMAD en 6 de geometría, TXQ.B en 6 y SUST en 1 de los de main, TLD multimuestra en 6, TLD4.B en
+  4, VMNMX en 3). tools/shader_pick.py saca los que fallan para repetirlos solos.
+
+0.29.0-beta (2026-11-16) — la interfaz entera en pantalla ancha; barrido de shaders
+  1. Pantalla ancha: la interfaz ya no se corta. El CanvasScaler de Unity calculaba la escala de cada lienzo con el
+     ancho de la pantalla (el ajuste del juego, diseñado para 16:9): en 21:9 la interfaz crecía un 33 % y perdía arriba
+     y abajo el logo del título, la cabecera «Load» y el botón «Back». tools/game_overrides.c sustituye
+     CanvasScaler.HandleScaleWithScreenSize (main 0x7001fdb520; los nombres, de un volcado de IL2CPP) por una igual al
+     código abierto de uGUI que calcula la escala con el 16:9 que cabe dentro de la pantalla
+     (runtime/hle/unity_screen.c rt_unity_ui_scale_screen): cada elemento conserva su tamaño de 16:9 y lo anclado a los
+     bordes del lienzo va a los bordes. En 16:9 no cambia nada. Queda: el juego pone su interfaz en un panel fijo de
+     1920x1080, así que el fondo del título y el oscurecido de los diálogos no llegan a los lados (bandas).
+  2. Shaders de cómputo de Unity: traen una cabecera propia de 0x100 bytes (mágico 0x12345679) antes del código; el
+     traductor la leía como instrucciones (runtime/nvn/maxwell/translate.c). Los 55 del juego se traducen ahora.
+  3. tools/shader_sweep.c: traduce y compila a SPIR-V todos los shaders del juego sin jugar (los ~82.000 que saca la
+     herramienta de nxnative dm/gfx/tools/shader_split.py con DM_GAME=0100BC0018138000) y agrupa los fallos.
+  Probado: título, menú «Load» y diálogo en 2560x1080 y en 1920x1080, en una copia aislada.
+
+0.28.0-beta (2026-11-16) — menú del runtime en español del todo
+  1. Controles (runtime/ui/controls_ui.mm): en español y solo con lo que vale para SMRPG: configurar controles,
+     mandos en segundo plano, vibración e intensidad, aceptar en los menús. Fuera lo de Link's Awakening (la cruceta
+     que mueve a Link, el movimiento en 360 grados, la luz del mando con su salud, los iconos de botones que cambian sus
+     texturas).
+  2. runtime/ui/option_rows.mm: las mayúsculas de las etiquetas cambian también las letras con tilde y la eñe (antes
+     «VIBRACIóN»); los interruptores dicen «Sí» / «No»; el título del menú es «Ajustes».
+  Probado con el menú abierto en una prueba (LARECOMP_MENU_AT / LARECOMP_MENU_TAB / LARECOMP_WINDOW_SHOT).
+
+0.27.0-beta (2026-11-16) — las miniaturas de los guardados se ven; «Compilación de shaders»
+  1. runtime/nvn/vulkan/exec.c: un dibujo cuyo programa o pipeline aún se compila se salta (sin tirones), pero en un
+     destino pequeño (<= 512 x 512) espera: la miniatura del guardado (266x150) es un dibujo de una sola vez y salía
+     vacía (el JPEG del guardado, uniforme, de 1.307 bytes).
+  2. copy_buffer_to_texture: una textura escalada (16:9 con marca de destino, a la escala de render) recibía los datos
+     del juego copiados 1:1 en una imagen de otro tamaño: las filas se plegaban. Ahora van a una imagen temporal del
+     tamaño del juego y de ahí con un blit (la captura de pantalla de 1920x1080 que el juego reduce para la miniatura).
+  3. Menú > Vídeo > «Compilación de shaders»: en segundo plano (por defecto) o esperar (nunca falta nada; algún tirón
+     la primera vez que se ve cada cosa).
+  4. LARECOMP_LOG_COPIES=1: cada lectura de textura a memoria del juego al registro y, las RGBA8, a build/copy_*.png.
+  Probado: el autoguardado sale en «Load» con su miniatura (el pasillo del castillo).
+
+0.26.0-beta (2026-11-16) — detalle de texturas
+  Menú > Vídeo > Imagen > «Detalle de texturas»: normal, alto o máximo = un sesgo de LOD de -0.5 / -1 en los
+  muestreadores con mipmaps (no en los de sombras): a distancia se usa un nivel más fino de cada textura, más nítido
+  (va bien con supersampling, que quita el centelleo). La caché de muestreadores recuerda el anisótropo y el detalle
+  con que se hizo cada uno (textures.c vk_sampler). Probado en el pasillo del castillo con el máximo.
+
+0.25.0-beta (2026-11-16) — idioma del juego (los textos en español, entre otros)
+  1. Menú > Vídeo > Juego > «Idioma del juego»: automático o uno de los del juego (japonés, inglés, español, francés,
+     alemán, italiano, neerlandés, ruso, coreano, chino simplificado / tradicional). Se aplica al volver a abrir el
+     juego (lo lee al arrancar: am GetDesiredLanguage).
+  2. runtime/settings.c: «Automático» en Windows usa el idioma de Windows (GetUserDefaultLocaleName: es-ES / es-MX ->
+     español); antes era siempre inglés fuera de Linux. El código de idioma se corta también en el guion.
+  Probado con «es»: la pantalla de carga sale como «Cargar», «Castillo de Bowser», «Nueva partida», «Archivo 1»,
+  «Atrás», PV / NIV y la fecha en formato día-mes.
+
+0.24.0-beta (2026-11-16) — Super Mario RPG Recomp: nombre e icono propios, pantalla ancha de verdad, supersampling,
+nitidez, anisótropo, más de 60 FPS y HDR10
+  1. Nombre e icono: el ejecutable es build/smrpg-recomp.exe (Makefile; la DLL del juego importa de él), la ventana
+     y los mensajes dicen «Super Mario RPG Recomp» (runtime/app_name.h, APP_NAME), recurso VERSIONINFO con la versión
+     de este archivo (Administrador de tareas, Explorador) e icono nuevo (estrella dorada sobre índigo:
+     tools/make_icon.py genera docs/icon/icon.ico, icon_512.png e icon.svg sin dependencias).
+  2. Pantalla ancha de verdad (ultrawide 21:9 / 32:9 y 16:10): Unity decide su resolución en main 0x70006b7204; lasgame.dll
+     la sustituye sin regenerar el código (tools/game_overrides.c se enlaza el primero con --allow-multiple-definition)
+     y runtime/hle/unity_screen.c ensancha la pantalla del juego al aspecto del monitor (a pantalla completa) o de la
+     ventana. Unity crea entonces su escena, su cámara y su interfaz a ese tamaño; las texturas de ventana y la
+     profundidad del backbuffer, que reserva a 1920x1080, se crean al tamaño nuevo (objects.c; solo las dibuja la GPU).
+     El renderizador escala desde la pantalla del juego (g_guest_w / g_guest_h: output_scale.c, tex_scalable).
+     Probado a 2560x1080: el pasillo del castillo ocupa todo el ancho y el HUD se ancla a la esquina. La cámara del
+     título conserva su encuadre horizontal (recorta arriba y abajo). El ensanchado de Link's Awakening queda solo
+     para él (widescreen_allowed). Ajuste «Pantalla ancha» (se aplica al volver a abrir el juego).
+  3. Resolución interna con nombre: 720p, 900p, 1080p, 1440p, 1800p, 2160p (4K), 2880p (5K), 4320p (8K), «igual que
+     la pantalla», dinámica y 50 / 67 / 75 / 85 %.
+  4. Supersampling x2 / x4 / x8 / x16: raíz(N) veces más líneas y columnas, reducido a la ventana con un filtro de caja
+     en espacio lineal (downsample.frag; el bilineal del present solo promediaba 2x2). Combinable con SMAA.
+  5. Nitidez 0-10 (AMD RCAS a la resolución final, también sin escalado) y filtrado anisótropo forzado (el del juego,
+     2x-16x; 16x por defecto) en los muestreadores con mipmaps lineales.
+  6. Límite de FPS (30 / 60 / 90 / 120 / 144 / 165 / 240): el vsync que espera Unity (hle/vi.c) va a ese ritmo.
+     Probado a 120: 120 FPS estables y sin desfase en el movimiento (en 2 s reales Mario recorre lo mismo que a 60).
+  7. HDR10: con «HDR» y una pantalla que lo ofrece (Windows: «Usar HDR»), la cadena de intercambio es A2B10G10R10 +
+     ST2084 (VK_EXT_swapchain_colorspace); la ventana se dibuja en una imagen SDR intermedia y hdr10.frag la pasa a PQ
+     en Rec.2020 con «blanco de papel», «brillo máximo» y «realce de luces» ajustables. Probado: «HDR10 (PQ) activo».
+  8. Menú para SMRPG en español: pestañas Controles, Vídeo, Audio y Salir (sin las de Link's Awakening: editor de
+     partidas, aleatorizador, trucos, cosméticos...), Audio solo con el volumen y Salir solo al escritorio.
+  9. tools/probar.sh: con LARECOMP_DATA_ROOT (carpeta de datos aislada: sus propios save/ y larecomp.ini) se puede
+     probar junto a una partida abierta; cierra el árbol de su proceso (plat_exec relanza el programa y espera).
+  DLSS no está: necesita una tarjeta NVIDIA. FSR 2/3/4 con generación de fotogramas, pendiente (pide vectores de
+  movimiento que el juego no dibuja).
+
+0.23.0-beta (2026-11-16) — orden de canales de las texturas empaquetadas de 16 bits (RGBA4, RGB565, RGB5A1, RGB5)
+  runtime/nvn/vulkan/textures.c: los formatos empaquetados de NVN llevan R desde el bit 0; Vulkan nombra los suyos
+  desde el bit alto. El RGBA4 iba como R4G4B4A4 y se leía con los cuatro canales al revés: nxnative lo vio en
+  SMRPG (el shadowmask de Mushroom Way, texeles 0x0f00, dejaba el suelo y el follaje de las batallas casi negros).
+  Ahora RGBA4 = A4B4G4R4 (núcleo en Vulkan 1.3) y RGB565 = B5G6R5, exactos si el dispositivo los muestrea (si no,
+  el formato anterior con los canales reordenados en la vista); RGB5A1 y RGB5 = A1R5G5B5 con rojo y azul cambiados
+  en la vista (antes R5G5B5A1 y R5G6B5: ni los anchos de bits coincidían). VkFmt.chan: el reordenamiento que
+  aplica la vista de muestreo, junto con el swizzle de NVN y alpha_one.
+  Sin comprobar en el juego: el castillo de Bowser no usa estos formatos (Mushroom Way sí, según nxnative).
+
+0.22.0-beta (2026-11-16) — la hora de los guardados es la local; lanzador para jugar y pruebas que no cierran el juego
+  1. runtime/services/time.c: ToCalendarTime con la regla que el juego carga (orden 100) da la hora local del PC,
+     como ToCalendarTimeWithMyRule: la única regla que hay es la del dispositivo. Unity (DateTime.Now) va por ahí y
+     la fecha de los guardados salía en UTC en vez de en la hora local. También ToPosixTimeWithMyRule (202).
+     Comprobado: un autoguardado nuevo sale con su hora local en la pantalla «Load».
+  2. jugar.cmd (nuevo): arranca el juego con sonido, mando y teclado (los controles van en el propio archivo).
+  3. tools/probar.sh (nuevo): un arranque de prueba que no se lanza si el juego ya está abierto y al final cierra
+     solo su proceso (por su PID de Windows, tomado de tasklist: $! es el de env). Antes las pruebas acababan con
+     taskkill por nombre, que habría cerrado también la partida de quien estuviera jugando.
+  Probado con entrada programada: cargar el autoguardado deja a Mario en el pasillo del castillo; se mueve en las
+  cuatro direcciones, la cámara le sigue, se ve la escena de la alfombra y un Terrapin cobra vida y patrulla.
+
+0.21.0-beta (2026-11-16) — nvnTextureWriteTexels(Strided) completos; la partida se juega y se autoguarda
+  1. runtime/nvn/objects.c, tegra.c / .h: WriteTexels escribe cualquier región: el nivel de mip y la primera capa
+     de la vista, z como capa (array, cubo) o como corte (3D), texturas lineales (flag 0x10, filas a su stride) y,
+     en WriteTexelsStrided (antes vacío), los pasos de fila e imagen. tegra_swizzle_region escribe una subregión
+     block-linear. Antes solo se escribía el nivel 0 entero: las 6 caras del cubemap por defecto de Unity caían
+     todas en la cara 0 y lo demás era «partial WriteTexels not implemented» (171 veces en un arranque).
+     LARECOMP_LOG_WRITETEXELS=1 registra cada escritura.
+  2. Probado con la ruta de partida nueva y A cada 150 fotogramas: la cinemática termina, Mario entra en el castillo
+     de Bowser con el HUD de juego (X Objetos, Y Especial, + Menú, PV y PF) y el juego se autoguarda
+     («Saving...»: save/save_0/SMR_Save_Ver0011000, 193 KB, y su imagen).
+
+0.20.0-alfa (2026-11-16) — los personajes se ven (Mario, Bowser, Peach) y un fallo intermitente al empezar un vídeo
+  1. runtime/nvn/maxwell/translate.c: el rastreo del manejador de un TEX.B acepta varias definiciones que llegan
+     por el grafo de control si al rastrearlas dan las mismas palabras de c[2]. El shader de los personajes
+     (751804f880) hace LOP.OR r24 = r24 | c[2][sampler] en 0x28 y lo repite en 0x738 en uno de sus dos caminos: a su
+     TEX.B de 0x1c28 llegaban dos definiciones y se rendía («handle r26 not traced»), y el cuerpo de los personajes
+     no se dibujaba (solo su contorno negro). Una palabra repetida en un OR se acepta (es idempotente); en un IADD no.
+     Ahora se traducen todos los shaders (0 dibujos saltados).
+  2. runtime/nvn/objects.c, nvn.h, vulkan/exec.c: un command buffer grabado antes de que el juego finalizase una
+     textura y enviado después la nombra todavía (en la consola es válido: la orden escribe la memoria del pool).
+     CRI lo hace con sus texturas de vídeo (1920x1088): la copia leía un NvnTexture ya liberado y reutilizado
+     (backend = 1, fallo del anfitrión en tex_backend en uno de cada ~9 arranques). El objeto finalizado queda
+     marcado (dead) en un cementerio de 4.096 y las copias / ClearTexture que lleguen a él se saltan con una línea.
+  3. El mensaje «FS translate failed» lleva la dirección del shader; con LARECOMP_LOG_BINDLESS=1 el programa que no
+     se rastrea se guarda en build/bindless_<dirección>.bin, para desensamblarlo aparte (con la tabla de
+     instrucciones de Ryujinx).
+
+0.19.0-alfa (2026-11-16) — vídeos de CRIWARE (VP9) y audio Opus: el juego llega al título y empieza una partida
+  1. runtime/hle/movie.c: CRIWARE Sofdec demultiplexa sus USM y da el VP9 a movie::Decoder (modo 2, textura).
+     Faltaban las funciones con las que configura el decodificador: CreateVp9DecoderConfigurationData (devuelve un
+     bool: CRI solo llama a Configure si es cierto, main 0x7001521950; con 0 lo reintentaba cada fotograma y el vídeo
+     no empezaba nunca) y CreateH264DecoderConfigurationData (SPS / PPS en Annex B), con los parámetros de FFmpeg en
+     el MediaData. También SetCoreMask, Buffer::Data, MediaData::FindInt64 / FindRect / operator=.
+  2. movie::Decoder como el del SDK 14 (su vtable leída del subsdk0 de SMRPG: las 19 entradas coinciden):
+     GetOutputBufferSize devuelve el tamaño de una salida y el modo (antes 0 y un int64 en un int);
+     GetOutputBuffer(i, Buffer*, MediaData*) (entrada 17) funciona; en modo CPU el fotograma se copia en el búfer del
+     cliente con NV12 compacto; el formato de salida lleva nv12-uv-stride, nv12-width / height, nv12-colorspace,
+     stride, slice-height y crop (lo que pone el SDK); «no hay entrada / salida» con los códigos del SDK
+     (0x1011 / 0x100e). Ya se ven los logos, el vídeo de apertura, la pantalla de título y la cinemática de partida.
+  3. runtime/services/hwopus.c (nuevo): el decodificador Opus «por hardware» de la Switch con libopus (enlazada en
+     el Makefile). Gestor: órdenes 0-9 (switchbrew: 7 = GetWorkBufferSizeForMultiStreamEx, parámetros en un búfer X);
+     decodificador: 0-9 (cabecera de Nintendo de 8 bytes en big-endian + paquete Opus -> PCM de 16 bits intercalado).
+     Antes era un stub de registro: el tamaño del búfer de trabajo valía 0 y CRI no abría ningún decodificador. Ahora
+     el audio de los vídeos sale (LARECOMP_AUDOUT_WAV lo vuelca a un WAV; LARECOMP_HWOPUS_LOG=1 registra cada orden).
+  4. El quad negro a pantalla completa que tapaba la escena (la «composición final oscura» de la versión 18) era el
+     fondo del reproductor de vídeo de CRI esperando fotogramas: con el VP9 desaparece. El post-proceso estaba bien.
+  5. Diagnóstico del renderizador (nvn/vulkan/exec.c):
+     - el volcado de pasadas (LARECOMP_DEBUG_FRAME) guardaba el destino de la pasada SIGUIENTE antes de dibujar en él
+       (st.rt ya había cambiado al cerrar la pasada): ahora guarda el de la pasada que termina;
+     - el registro del dibujo imprime el búfer de índices, la mezcla del destino 0 (NVN y Vulkan), la imagen de cada
+       textura y la fila de rscale; [ubind] y los cbuf con el índice de la API;
+     - LARECOMP_DBG_FS=<código>:<pc>:<registro> muestra un registro del shader de fragmentos; con LARECOMP_DBG_MARK=1
+       el verde se pone a 1 (se ejecutó) y el azul lleva el valor / 1000; LARECOMP_DEBUG_FS_INPUTS=<código> vuelca
+       sus texturas de entrada; LARECOMP_SKIP_FSHASH=<hash> se salta un dibujo.
+  Pendiente: los personajes (Mario, Bowser) salen como siluetas negras: su shader es el que aún no se traduce
+  («handle r26 not traced») y solo se ve el contorno.
+
+0.18.0-alfa (2026-11-15) — los shaders de Unity se traducen y el juego dibuja (primera imagen: el castillo de Bowser)
+  Todo en runtime/nvn/maxwell/translate.c (el traductor de shaders Maxwell a GLSL de LASRecomp):
+  1. EXIT, KIL y BRA respetan su condición de código (bits 0-4). Los shaders de vértices de Unity hacen VOTE.VTG y
+     luego EXIT CC.FCSM_TR: salir solo si todo el primitivo queda fuera de la pantalla. El EXIT se ejecutaba siempre,
+     antes de escribir gl_Position, y no se rasterizaba nada: la pantalla negra. Como en Ryujinx, una condición que no
+     se sigue es falsa en EXIT / KIL y cierta en BRA.
+  2. VOTE.VTG (0101 0000 1110 0) como instrucción sin efecto (yuzu y Ryujinx igual): estaba en casi todos los shaders
+     de vértices y los hacía fallar.
+  3. HSETP2 y HSET2 en sus formas con constant buffer e inmediato (campos de Ryujinx InstHsetp2C/I, InstHset2C/I).
+  4. Texturas bindless (TEX.B): el manejador se rastrea hasta sus palabras de c[2] (textura combinada o separada, y
+     el sampler separado) a través de MOV, LDC, LOP / LOP3 OR e IADD: primero en el bloque y, si no, con un análisis
+     de las definiciones que llegan por el grafo de control (SYNC / BRK / CONT emparejados con su SSY / PBK / PCNT).
+     Un escritor con el mismo predicado que el uso cuenta (@!P1 MOV + @!P1 LOP.OR + @!P1 TEX.B), y también el OR
+     condicional del sampler. Una ranura por pareja textura-sampler (un shader puede leer la misma textura con dos).
+  5. TLD y TLD.B (lectura de texel, forma completa) en GLSL, con los operandos de Ryujinx; la máscara de TEX.B es la
+     real (1101111010) y su predicado de residencia queda a cierto.
+  6. El contexto del traductor rellena c->code y c->ninsts (antes vacíos).
+  7. Diagnóstico: LARECOMP_LOG_BINDLESS=1 (por qué no se rastrea un manejador) y LARECOMP_DEBUG_FS_COLOR=1 (todo
+     shader de fragmentos escribe magenta: ¿se rasteriza?).
+  Resultado: todos los shaders salvo uno se traducen (82.000 dibujos cada 2 s, 121 saltados). Pulsando A para saltar
+  el vídeo de apertura (aún sin decodificar), el juego dibuja la escena del castillo de Bowser con su iluminación y
+  la tabla de color; la composición final todavía sale muy oscura.
+
+0.17.0-alfa (2026-11-15) — texturas y samplers separados de NVN en el runtime y el renderizador
+  1. nvn/cmdbuf.c, nvn.h: nvnCommandBufferBindSeparateTexture(s) y BindSeparateSampler(s) guardan sus manejadores en
+     sus propias tablas (en el driver de la Switch, c[2] 0x168 + 8r y 0x568 + 8r, 128 ranuras cada una). Antes las
+     texturas separadas iban a la tabla de las combinadas y los samplers separados se ignoraban. Unity (SMRPG) usa
+     texturas y samplers separados en todos sus shaders.
+  2. nvn/vulkan/exec.c: shader_tex_handle compone el manejador de cada textura del shader desde la tabla que le toca
+     (combinada o separada) y, en las bindless, le une la palabra del sampler separado (textura en los bits 0-19,
+     sampler en 20-31), como hace el shader en la consola.
+  3. LARECOMP_DEBUG_DATA también imprime los constant buffers del shader de vértices (y avisa de los no vinculados).
+  Sin la versión 18 (el traductor) no cambia nada visible.
+
+0.16.0-alfa (2026-11-15) — el sdk ya no se carga dentro de main
+  1. rt.h, Makefile, gamebuild.c y tools: el sdk se carga en 0x7005000000 (antes 0x7004000000, la base de Link's
+     Awakening). El main de SMRPG ocupa 0x4dbc000 bytes con su .bss, hasta 0x7004dbc000: el sdk caía dentro, y las
+     globales del final del .bss de main (que deben empezar a cero) contenían el código del sdk. Una de ellas, un
+     objeto de retrollamada en main 0x410a238, llevaba bytes de instrucciones como puntero a función: «no function at
+     9100056c9b0ca609».
+  2. loader.c: si un módulo empieza dentro del anterior, error fatal con los dos rangos.
+  3. ESTADO.md al día.
+  Requiere regenerar el sdk («make gen», o solo la línea de gen.py sdk) y recompilar.
+  Resultado: el juego corre a 60 fps estables sin caerse (más de 1.000 fotogramas en 20 s), pero todavía no dibuja
+  nada: todas las llamadas de dibujo se saltan («0 draws»).
+
+0.15.0-alfa (2026-11-15) — fuera los ganchos por fotograma de Link's Awakening
+  1. La tabla de direcciones v1_0_0 que usa SMRPG es la de Link's Awakening 1.0.0 (el primer intento reutilizó la clave): en
+     SMRPG esas direcciones no apuntan a nada suyo. g_game_las (false) hace que game_in_play, el nombre del nivel,
+     warp_frame (salvo las pruebas de capturas y de fallos) y save_editor_frame (trucos, dificultad) no las lean. Al
+     presentar el primer fotograma, los trucos de LA leían un «gestor de partida» que no existe y el juego se caía
+     (lectura en 0xffffffffffffffff).
+  Resultado: pasa el primer fotograma y se cae saltando a una dirección basura desde una global de main.
+
+0.14.0-alfa (2026-11-15) — propiedades del dispositivo NVN de la consola y BindProgram nulo
+  1. nvn/objects.c: nvnDeviceGetInteger responde con los valores medidos en una Tegra X1 (0x02-0x68, los que recoge
+     nxnative). La tabla de LASRecomp acababa en 0x40 y devolvía 0 para la 0x5E (SEPARATE_TEXTURE_BINDINGS_PER_STAGE,
+     128 en la consola), que Unity guarda como máximo de texturas por shader: todo shader con una textura fallaba al
+     crearse, sus parámetros se quedaban sin preparar (tamaño 0) y la orden SetShaders desalineaba el búfer de
+     órdenes del hilo gráfico (fallo leyendo 0x30e56). Una propiedad desconocida se avisa una vez.
+  2. nvn/cmdbuf.c: nvnCommandBufferBindProgram(NULL, etapas) desvincula etapas (Unity lo hace con geometría,
+     teselación y cómputo); antes se leía el programa nulo (fallo en la dirección 0).
+  3. LARECOMP_NVN_INFO_LOG=1 registra cada propiedad del dispositivo que pide el juego y desde dónde.
+  Resultado: el juego graba, envía y presenta su primer fotograma; después se cae en código de Link's Awakening.
+
+0.13.0-alfa (2026-11-15) — el hilo gráfico ya no se queda dormido (despertar perdido en las variables de condición)
+  1. kernel.c: WaitProcessWideKeyAtomic marca la variable de condición como «con esperas» ANTES de soltar el mutex,
+     como el kernel de la Switch (mesosphere). El Signal/Broadcast del SDK no llama al kernel si esa marca vale 0: con
+     el orden al revés, el hilo principal cogía el mutex justo al soltarse, sumaba 1 al semáforo de
+     UnityGfxDeviceWorker, veía la marca a 0 y no lo despertaba. El hilo gráfico se dormía para siempre con 740 KB de
+     órdenes sin leer, y la carga de «level0» esperaba una subida asíncrona (rom:/Data/level0.resS, ya leída) que
+     nunca se hacía.
+  2. Diagnóstico: LARECOMP_WATCH_ADDR funciona desde el arranque; con LARECOMP_FNPROF=0:<n> cada volcado de cuelgue
+     escribe build/fnprof_cuelgueN.txt (qué funciones del juego corrieron y cuántas veces); LARECOMP_CRASH_HOLD=<s>
+     deja el proceso vivo unos segundos tras un fallo para leer su memoria con gdb.
+  Resultado: pasa «level0»; el hilo gráfico crea buffers y programas, y el juego se cae al fijar los shaders.
+
+0.12.0-alfa (2026-11-15) — el volcado de cuelgues da los registros de cada hilo dormido
+  1. kernel.c: para cada hilo que espera, x19-x28 y sp (los registros que se conservan entre llamadas suelen llevar los
+     objetos de quien espera: así se encontró el PreloadManager, x24 − 0x310).
+  2. ESTADO.md: el bloqueo actual (la integración de «level0») con lo que ya se sabe y la receta para leer la memoria
+     del juego colgado con gdb.
+
+0.11.0-alfa (2026-11-15) — orden de memoria de LDAR/STLR como en AArch64
+  1. cpu.h: LDAR y STLR se traducen como seq_cst (en x86, la escritura es un xchg con barrera completa). En AArch64 un
+     STLR y un LDAR posteriores quedan ordenados (así compila C++ sus atómicos seq_cst); con release/acquire, en x86
+     una carga podía adelantarse a la escritura anterior y Unity perdía despertares entre hilos: el hilo principal y
+     UnityGfxDeviceWorker acababan dormidos a la vez.
+  2. ESTADO.md al día (dónde está el arranque, hilos de Unity, trampas conocidas).
+  Requiere recompilar el juego entero (cambia runtime/cpu.h).
+  Resultado: el hilo principal sigue adelante y crea Loading.PreloadManager; el juego se queda integrando en el hilo
+  principal la primera operación de carga (IntegrateMainThread nunca termina): el siguiente problema.
+
+0.10.0-alfa (2026-11-15) — volcados de cuelgues que dicen quién es cada hilo y qué hizo
+  1. kernel.c: el volcado de cuelgues (LARECOMP_HANG_DUMP) imprime el nombre que el juego dio a cada hilo
+     (nn::os::SetThreadName: «MainThread», «UnityGfxDeviceWorker», «Loading.PreloadManager»…) y sus últimas 10
+     llamadas al host.
+  2. Cada hilo anota sus últimas 32 llamadas al host y al sistema (salvo GetSystemTick); los errores fatales las vuelcan.
+  3. La traza del kernel guarda los últimos 2.048 eventos de mutex y condvar (eran 256).
+
+0.9.0-alfa (2026-11-15) — los errores fatales dicen qué llamó el juego al host
+  1. dispatch.c: cada hilo guarda sus últimas 32 llamadas al host (nombre, x0-x3 y desde dónde) y un error fatal las
+     vuelca. Así se vio que el fallo de la versión 8 venía de la vista de textura.
+
+0.8.0-alfa (2026-11-15) — texturas NVN: pool, desplazamiento de vistas y vistas de 16 bytes
+  1. nvnTextureGetMemoryPool devuelve el pool que el juego dio al builder (antes 0). Unity sube cada textura con
+     GetMemoryPool + GetMemoryOffset + nvnMemoryPoolMap + memcpy + FlushMappedRange, y el runtime leía un pool nulo.
+  2. nvnTextureGetViewOffset calcula el desplazamiento del primer nivel y la primera capa de la vista (antes 0).
+  3. La vista de textura (NVNtextureView) ocupa 16 bytes, como en el NVN de los SDK nuevos (NVN 55). El registro de
+     LASRecomp ocupaba 0x1C: Unity la guarda en un hueco de 16 bytes de la pila, y los setters escribían encima de los
+     registros guardados (el hilo gráfico volvía con x28 = 0 y fallaba). nxnative encontró lo mismo.
+  Resultado: Unity sube texturas sin fallar y el juego sigue cargando datos durante más de 60 s.
+
+0.7.0-alfa (2026-11-15) — el recolector de basura puede parar a los demás hilos
+  1. kernel.c: svc SetThreadActivity (0x32) y GetThreadContext3 (0x33), con pausa cooperativa. El GC de IL2CPP para los
+     hilos con nn::os::SuspendThread y lee sus registros con nn::os::GetThreadContext. El hilo pausado se detiene en el
+     siguiente punto seguro: la entrada de cualquier función del juego (FN_ENTER ya miraba g_fnprof; su bit 2 avisa de la
+     pausa, así que no cuesta nada sin pausas), una llamada al sistema o al host. Nunca se congela un hilo del host en un
+     punto cualquiera, que podría tener un candado del runtime o del driver.
+  2. Makefile: fuera las ~200 semillas (--seeds) que el primer intento había puesto a mano en el sdk para tapar las tablas de
+     saltos. Con la versión 3 estorbaban: volvían a partir vfprintf y su «switch» quedaba sin resolver.
+  Resultado: el juego crea unos 25 hilos, abre ssl y hid, e inicializa NVN y Vulkan (dispositivo, ventana, vsync).
+
+0.6.0-alfa (2026-11-15) — interposición de símbolos como el rtld de la Switch
+  1. loader.c: un símbolo que el módulo define también se busca en todos los módulos en orden de carga, y gana el de
+     main. Así el operator new/delete de Unity (globales en main) sustituyen también dentro del sdk a los débiles del
+     SDK: antes el std::string del sdk liberaba con el heap del SDK memoria del asignador de Unity, y el heap paraba el
+     juego (nnmem_nlib_debug_break). 38 símbolos del sdk pasan a las definiciones de main.
+  2. loader.c: tabla hash global de símbolos (la búsqueda lineal habría sido demasiado lenta para todas las reubicaciones).
+
+0.5.0-alfa (2026-11-15) — nn::ro sin servicio ldr:ro
+  1. hle/ro.c: las 8 funciones de nn::ro que importa el juego. Initialize ya no usa ldr:ro ni las listas del rtld (que
+     aquí no existe: los punteros quedaban a 0 y se escribía en la dirección 0); LookupSymbol busca en los módulos
+     cargados (lo usan los [DllImport("__Internal")] de Unity, como el plugin de CRIWARE). El juego no trae NRO.
+
+0.4.0-alfa (2026-11-15) — el RomFS del juego se monta
+  1. fs.c: el RomFS se sirve desde la carpeta romfs/ si existe. Antes se exigía region_common/, una carpeta de Link's
+     Awakening, y sin ella se buscaba un romfs.bin que no hay («cannot read the game data»).
+  Resultado: 1.935 archivos servidos desde extracted/romfs; el juego empieza a leerlos.
+
+0.3.0-alfa (2026-11-15) — los «switch» del juego (tablas de saltos comprimidas) y la tabla de funciones
+  1. gen.py: la base de una tabla de saltos comprimida de LLVM (adr xB, L ; ldrb ; add xD, xB, xI, lsl #2 ; br xD) ya
+     no se toma como inicio de función. Antes partía la función justo en la tabla, la tabla quedaba sin resolver y los
+     «case» iban al despachador global, que no los conoce («no function at»). Afectaba a 2.305 tablas de main y 690 del
+     sdk: casi cualquier «switch» del juego fallaba en cuanto no tocaba el primer caso. Tablas resueltas: main 115 → 1.926,
+     sdk 49 → 560; funciones partidas de más: main 174.584 → 154.801, sdk 46.566 → 40.015.
+  2. gen.py: la tabla de funciones (dirección → función) queda ordenada. Las «funciones extra» que añadía la versión 0
+     iban al final, fuera de orden, y la búsqueda binaria del runtime no encontraba otras funciones (un constructor
+     del juego que sí existía).
+  3. Entre el add y el br de una tabla puede haber otras instrucciones (8 constantes en un xxHash32): se miran hasta 16
+     instrucciones sin saltos (2.305 de los 2.307 ADR de main son tablas así).
+  Requiere «make gen» y recompilar el juego entero.
+  Resultado: corren los 288 constructores del juego y arranca nnMain (time, fs, am).
+
+0.2.0-alfa (2026-11-15) — atómicos de 128 bits (pares exclusivos)
+  1. El recompilador traduce LDXP/LDAXP/STXP/STLXP. Eran las 50 únicas instrucciones del juego que quedaban sin traducir
+     (trampas «exclusive pair / CAS»): Unity/IL2CPP las usa para atómicos de 128 bits. Se emulan igual que el monitor
+     exclusivo simple, con un compare-and-swap de 16 bytes (cmpxchg16b) contra lo que leyó el LDXP.
+  2. ESTADO.md: cómo probar, cómo analizar el código del juego con Ghidra y lo que se sabe del arranque.
+  Requiere «make gen» y recompilar el juego entero (cambian tools/lifter.py y runtime/cpu.h).
+  Resultado: ya no queda ninguna instrucción sin traducir en main ni en sdk. Los constructores del juego avanzan hasta un
+  «switch» cuya tabla de saltos el generador no resolvía («no function at 7000529144»).
+
+0.1.0-alfa (2026-11-15) — el heap del juego arranca (memoria virtual de nn::os)
+  1. Región alias de 48 GB (era de 4 GB) dentro de una ventana de 64 GB. El nninitStartup del juego reserva ~3,1 GB de
+     espacio virtual alineado a 1 GB para su StandardAllocator, y el gestor de regiones de nn::os se queda el primer GB:
+     con 4 GB no cabía y el juego abortaba con el error 2162-0001.
+  2. GetInfo como en la Switch: el «system resource» (16 MB) y el ID de programa se leen del main.npdm; la memoria usada
+     va en bytes (heap + 64 MB + memoria física mapeada); IsApplication, FreeThreadCount y la página de contexto de
+     excepción. Se quitan los valores «en páginas» de la versión 0 y el ID de Link's Awakening.
+  3. MapPhysicalMemory y UnmapPhysicalMemory: solo en la región alias y solo las páginas que cambian (mapa de bits). Antes
+     ponía a cero también las páginas ya mapeadas y borraba el objeto de TlsHeapCentral.
+  4. svcBreak vuelve a cerrar el juego: el motivo 0 es «Panic» (un abort), no «continuar». Ahora dice el motivo y el
+     resultado de cierre que dejó el juego (am SetTerminateResult, que también queda en el registro).
+  Resultado: nninitStartup monta el heap, corren los 112 constructores del sdk y empiezan los 288 del juego; el primero
+  que usa un atómico de 128 bits se para en una instrucción que el recompilador no traducía (LDXP).
+
+0.0.0-alfa (2026-11-15) — el estado heredado del primer intento
+  Lo que hizo el primer intento (un agente de IA local) el 14 y el 15 de noviembre sobre LASRecomp 579fdad:
+  1. Tabla de versiones y lista del RomFS de SMRPG 1.0.0 (build ID de main e968832cade2ad7c...).
+  2. gen.py y Makefile: traducen main (174.586 funciones) y sdk (46.566), con semillas extra para la tabla de saltos
+     de __nnmusl_init_dso que faltaba en el código generado.
+  3. loader.c: busca nn::init::Start por prefijo (en el SDK 14.3.1 tiene un parámetro más).
+  4. main.c: los constructores de sdk y main corren en la llamada tardía de nn::init::Start, con el heap ya montado.
+  5. ipc.c: el protocolo antiguo de sm (mensajes de tipo 16 y 17) y registro de cada mensaje IPC.
+  6. kernel.c: valores de GetInfo y svcBreak cambiados a mano (la versión 1 los corrige).
+  7. dispatch.c: los errores fatales listan las direcciones del código del juego que hay en la pila.
+  Estado: el juego aborta dentro de nninitStartup (nn::mem::StandardAllocator::Initialize) y no llega a nnMain.

@@ -1,0 +1,6 @@
+# Guiones de bash, Python y el Makefile: siempre con LF al sacarlos (Git para Windows pone CRLF por defecto, y con CRLF
+# bash falla). Ya están guardados con LF: esto no cambia ningún archivo.
+*.sh        text eol=lf
+*.py        text eol=lf
+Makefile    text eol=lf
+tools/linux/AppRun text eol=lf
